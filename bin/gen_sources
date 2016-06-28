@@ -1,0 +1,74 @@
+#!/bin/env python
+
+""" Application to generate a list of random positions for sources.
+
+Generates and saves the list of sky coordinates for the sources to
+be used by other applications.
+"""
+
+#--------------------------------
+#  Imports of standard modules --
+#--------------------------------
+from argparse import ArgumentParser
+import logging
+import math
+import numpy
+import sys
+
+#-----------------------------
+# Imports for other modules --
+#-----------------------------
+from lsst.l1dbproto import generators
+
+#---------------------
+# Local definitions --
+#---------------------
+
+def _configLogger(verbosity):
+    """ configure logging based on verbosity level """
+
+    levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
+    logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+    logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
+
+FOV = 3.5  # degrees
+
+#---------------------------------
+#  Application class definition --
+#---------------------------------
+
+def main():
+
+    descr = 'One-line application description.'
+    parser = ArgumentParser(description=descr)
+    parser.add_argument('-v', '--verbose', action='count', default=0,
+                        help='More verbose output, can use several times.')
+    parser.add_argument('-m', '--mode', action='store', default='xyz',
+                        help='Defines type of output data, possible values are "xyz", def: "xyz"')
+    parser.add_argument('-H', '--hemi', type=int, default=0,
+                        help='Zero for whole sky, negative for southern hemisphere, '
+                        'positive for northern, def: 0')
+    parser.add_argument('-n', '--counts', type=int, default=10000,
+                        help='Number of sources per visit, def: 10000')
+    parser.add_argument('file', help='Name of output file')
+    args = parser.parse_args()
+
+    # configure logging
+    _configLogger(args.verbose)
+
+    # total number of sources
+    area = 2 * math.pi if args.hemi != 0 else 4 * math.pi
+    visit_area = math.pi * (FOV / 2 * math.pi / 180) ** 2
+    counts = int(args.counts * area / visit_area)
+    logging.info("Total sources: %d", counts)
+
+    points = generators.rand_sphere_xyz(counts)
+    numpy.save(args.file, points)
+
+#
+#  run application when imported as a main module
+#
+if __name__ == "__main__":
+    rc = main()
+    sys.exit(rc)
