@@ -1,6 +1,8 @@
+setupRequired(db)
 setupRequired(python)
 setupRequired(scons)
 setupRequired(sconsUtils)
+setupRequired(sqlalchemy)
 
 envPrepend(PATH, ${PRODUCT_DIR}/bin)
 envPrepend(PYTHONPATH, ${PRODUCT_DIR}/python)
