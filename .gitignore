@@ -1,0 +1,7 @@
+.sconsign.dblite
+.sconf_temp/
+config.log
+*.pyc
+*.cfgc
+tests/.tests
+python/lsst/l1dbproto/version.py
