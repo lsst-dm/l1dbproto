@@ -7,14 +7,17 @@ Module defining L1db class and related methods.
 #--------------------------------
 from collections import namedtuple
 import logging
+import math
 import sys
 
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
+from . import constants, timer
 from lsst.db import engineFactory
+from lsst import sphgeom
 import sqlalchemy
-from sqlalchemy import MetaData, Table, Column, PrimaryKeyConstraint, Index, sql
+from sqlalchemy import Column, Index, MetaData, PrimaryKeyConstraint, sql, Table
 
 #----------------------------------
 # Local non-exported definitions --
@@ -26,7 +29,46 @@ _LOG = logging.getLogger(__name__)
 # Exported definitions --
 #------------------------
 
-Visit = namedtuple('Visit', 'visitId visitTime')
+Visit = namedtuple('Visit', 'visitId visitTime lastObjectId lastSourceId')
+DiaObject_short = namedtuple('DiaObject_short', """
+    diaObjectId lastNonForcedSource ra decl raSigma declSigma ra_decl_Cov htmId20
+    """)
+DiaObject = namedtuple('DiaObject', """
+    diaObjectId validityStart validityEnd lastNonForcedSource
+    ra decl raSigma declSigma ra_decl_Cov
+    muRa muRaSigma muDecl muDecSigma muRa_muDeclCov
+    parallax parallaxSigma muRa_parallax_Cov muDecl_parallax_Cov
+    lnL chi2 N
+    flags htmId20
+    """)
+DiaSource = namedtuple('DiaSource', """
+    diaSourceId ccdVisitId diaObjectId
+    filterName prv_procOrder midPointTai
+    ra raSigma decl declSigma ra_decl_Cov
+    x xSigma y ySigma x_y_Cov snr
+    flags htmId20
+    """)
+DiaForcedSource = namedtuple('DiaForcedSource', """
+    diaObjectId  ccdVisitId
+    psFlux psFlux_Sigma
+    x y
+    flags
+    """)
+
+def _row2nt(row, tupletype):
+    """
+    Covert result row into an named tuple.
+    """
+    return tupletype(**dict(row))
+
+def _htm_repr(index, level):
+    res = ''
+    while level >= 0:
+        res = ('0', '1', '2', '3')[index % 4] + res
+        level -= 1
+        index >>= 2
+    res = {2: 'S', 3: 'N'}.get(index, 'X') + res
+    return res
 
 #---------------------
 #  Class definition --
@@ -60,14 +102,26 @@ class L1db(object):
         @return instance of Visit class or None
         """
 
-        stmt = sql.select([sql.func.max(self._visits.c.visitId),
-                           sql.func.max(self._visits.c.visitTime)])
-        res = self._engine.execute(stmt)
-        row = res.fetchone()
-        if row[0] is None:
-            return None
-        else:
-            return Visit(visitId=row[0], visitTime=row[1])
+        with self._engine.begin() as conn:
+
+            stmnt = sql.select([sql.func.max(self._visits.c.visitId),
+                                sql.func.max(self._visits.c.visitTime)])
+            res = conn.execute(stmnt)
+            row = res.fetchone()
+            if row[0] is None:
+                return None
+
+            visitId = row[0]
+            visitTime = row[1]
+
+            # get max IDs from corresponding tables
+            stmnt = sql.select([sql.func.max(self._objects.c.diaObjectId)])
+            lastObjectId = conn.scalar(stmnt)
+            stmnt = sql.select([sql.func.max(self._sources.c.diaSourceId)])
+            lastSourceId = conn.scalar(stmnt)
+
+            return Visit(visitId=visitId, visitTime=visitTime,
+                         lastObjectId=lastObjectId, lastSourceId=lastSourceId)
 
 
     def saveVisit(self, visitId, visitTime):
@@ -75,8 +129,138 @@ class L1db(object):
         Store visit information.
         """
 
-        ins = self._visits.insert().values(visitId=visitId, visitTime=visitTime)
+        ins = self._visits.insert().values(visitId=visitId,
+                                           visitTime=visitTime)
         self._engine.execute(ins)
+
+
+    def tableRowCount(self):
+        """
+        Returns dictionary with the table names and row counts.
+        """
+        res = {}
+        tables = ['DiaObject', 'DiaSource', 'DiaForcedSource']
+        for table in tables:
+            q = 'SELECT COUNT(*) FROM ' + table
+            count = self._engine.scalar(sql.text(q))
+            res [table] = count
+
+        return res
+
+
+    def getDiaObjects(self, xyz, FOV_rad, fullRecord=True, explain=False):
+        """
+        Returns the list of DiaObject instances around given direction.
+        @param xyz: pointing direction
+        @param FOV_rad: field of view, radians
+        @param fullRecord: if True read whole records from database
+        """
+
+        # decide what columns we need
+        q = "SELECT "
+        objects = self._objects
+        if fullRecord:
+            q += "* "
+        else:
+            q += "diaObjectId, lastNonForcedSource, ra, decl, raSigma, declSigma, ra_decl_Cov, htmId20 "
+        q += "FROM DiaObject "
+
+        # determine indices that we need
+        dir_v = sphgeom.UnitVector3d(xyz[0], xyz[1], xyz[2])
+        circle = sphgeom.Circle(dir_v, sphgeom.Angle(FOV_rad))
+        _LOG.debug('circle: %s', circle)
+        indices = sphgeom.htmIndex(circle, constants.HTM_LEVEL, constants.HTM_MAX_RANGES)
+        for range in indices.ranges():
+            _LOG.debug('range: %s %s', _htm_repr(range[0], constants.HTM_LEVEL), _htm_repr(range[1], constants.HTM_LEVEL))
+
+        # build selection
+        exprlist = []
+        params = {}
+        for i, (low, up) in enumerate(indices.ranges()):
+            up -= 1
+            if low == up:
+                exprlist.append("htmId20 = :htm{}".format(i))
+                params["htm{}".format(i)] = low
+            else:
+                exprlist.append("htmId20 BETWEEN :htm_low{0} AND :htm_up{0}".format(i))
+                params["htm_low{}".format(i)] = low
+                params["htm_up{}".format(i)] = up
+        q += "WHERE (" + " OR ".join(exprlist) + ") "
+
+        # select latest version of objects
+        q += " AND validityEnd IS :vend"
+        params["vend".format(i)] = None
+
+        _LOG.debug("q: %s", q)
+
+        if explain:
+            # run the same query with explain
+            self._explain(q, params, self._engine)
+
+        # execute select
+        with timer.Timer('DiaObject select'):
+            res = self._engine.execute(sql.text(q), params)
+        obj_type = DiaObject if fullRecord else DiaObject_short
+        objects = [_row2nt(row, obj_type) for row in res]
+        _LOG.debug("found %s DiaObjects", len(objects))
+        return objects
+
+    def storeDiaObjects(self, objs, dt, explain=False):
+        """
+        @param objs:  list of DiaObject instances
+        @param dt:       datetime for visit
+        @param explain:  if True then do EXPLAIN on INSERT query
+        """
+
+        ids = sorted([obj.diaObjectId for obj in objs])
+
+        # everything to be done in single transaction
+        with self._engine.begin() as conn:
+
+            # truncate existing validity intervals
+            q = "UPDATE DiaObject SET validityEnd = :dt WHERE diaObjectId IN ("
+            q += ', '.join([str(i) for i in ids])
+            q += ") AND validityEnd IS :vend"
+            params = {'dt': dt, 'vend': None}
+
+            if explain:
+                # run the same query with explain
+                self._explain(q, params, conn)
+
+            # _LOG.debug("update: %s", q)
+            with timer.Timer('DiaObject truncate'):
+                res = conn.execute(sql.text(q), params)
+            _LOG.debug("truncated %s intervals", res.rowcount)
+
+            # insert new versions
+            table = self._objects
+            self._storeObjects(DiaObject, objs, conn, table, explain)
+
+
+    def storeDiaSources(self, sources, explain=False):
+        """
+        @param sources:  list of DiaSource instances
+        @param explain:  if True then do EXPLAIN on INSERT query
+        """
+
+        # everything to be done in single transaction
+        with self._engine.begin() as conn:
+
+            table = self._sources
+            self._storeObjects(DiaSource, sources, conn, table, explain)
+
+
+    def storeDiaForcedSources(self, sources, explain=False):
+        """
+        @param sources:  list of DiaForcedSource instances
+        @param explain:  if True then do EXPLAIN on INSERT query
+        """
+
+        # everything to be done in single transaction
+        with self._engine.begin() as conn:
+
+            table = self._forcedSources
+            self._storeObjects(DiaForcedSource, sources, conn, table, explain)
 
 
     def makeSchema(self, drop=False):
@@ -98,7 +282,8 @@ class L1db(object):
         diaObject = Table('DiaObject', self._metadata,
             Column('diaObjectId', BIGINT, nullable=False),
             Column('validityStart', DATETIME, nullable=False),
-            Column('validityEnd', DATETIME, nullable=False),
+            Column('validityEnd', DATETIME, nullable=True),
+            Column('lastNonForcedSource', DATETIME, nullable=False),
             Column('ra', DOUBLE, nullable=False),
             Column('decl', DOUBLE, nullable=False),
             Column('raSigma', FLOAT, nullable=False),
@@ -402,6 +587,20 @@ class L1db(object):
         """ Lazy reading of table schema """
         return self._table_schema('L1DbProtoVisits')
 
+    @property
+    def _objects(self):
+        """ Lazy reading of table schema """
+        return self._table_schema('DiaObject')
+
+    @property
+    def _sources(self):
+        """ Lazy reading of table schema """
+        return self._table_schema('DiaSource')
+
+    @property
+    def _forcedSources(self):
+        """ Lazy reading of table schema """
+        return self._table_schema('DiaForcedSource')
 
     def _table_schema(self, name):
         """ Lazy reading of table schema """
@@ -410,3 +609,39 @@ class L1db(object):
             table = Table(name, self._metadata, autoload=True)
             self._tables[name] = table
         return table
+
+    def _explain(self, q, params, conn):
+        # run the query with explain
+        _LOG.info("explain for query: %s...", q[:32])
+        q = "EXPLAIN EXTENDED " + q
+        res = conn.execute(sql.text(q), params)
+        _LOG.info("explain: %s", res.keys())
+        for row in res:
+            _LOG.info("explain: %s", row)
+
+    def _storeObjects(self, object_type, objects, conn, table, explain=False):
+        """
+        Generic store method.
+
+        Stores a bunch of objects as records in a table.
+        @param object_type: Namedtuple type, e.g. DiaSource
+        @param objects:     Sequence of objects of the `object_type` type
+        @param conn:        Database connection
+        @param table:       Database table
+        @param explain:     If True then do EXPLAIN on INSERT query
+        """
+
+        keys = [key for key in table.c.keys() if key in object_type._fields]
+        q = "INSERT INTO " + table.name + " ("
+        q += ', '.join(keys)
+        q += ") VALUES ("
+        q += ', '.join([':' + key for key in keys])
+        q += ")"
+        _LOG.debug("insert: %s", q)
+        values = [obj._asdict() for obj in objects]
+        if explain:
+            # run the same query with explain
+            self._explain(q, values[0], conn)
+        with timer.Timer(table.name + ' insert'):
+            res = conn.execute(sql.text(q), values)
+        _LOG.debug("inserted %s intervals", res.rowcount)

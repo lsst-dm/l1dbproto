@@ -1,0 +1,344 @@
+#!/bin/env python
+
+"""
+Script which simulates AP workflow access to L1 database.
+
+It generates approximately realistic result of difference image analysis,
+source-to-object matching, and forced photometry and stores all that in
+a database.
+"""
+
+#--------------------------------
+#  Imports of standard modules --
+#--------------------------------
+from argparse import ArgumentParser
+from datetime import datetime, timedelta
+import logging
+import math
+import numpy
+import os
+import sys
+
+#-----------------------------
+# Imports for other modules --
+#-----------------------------
+from lsst.l1dbproto import constants, DIA, generators, l1db
+from lsst.sphgeom import htmIndex, LonLat, UnitVector3d, Vector3d
+
+#---------------------
+# Local definitions --
+#---------------------
+
+_LOG = logging.getLogger('ap_proto')
+
+def _configLogger(verbosity):
+    """
+    Configure logging based on verbosity level.
+    """
+
+    levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
+    logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+    logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
+
+_dt_format = ('%Y-%m-%d %H:%M:%S', 'YYYY-MM-DD hh:mm:ss')
+
+def _timeParse(dt_str):
+    """
+    Convert string to datetime object.
+    """
+    dt = datetime.strptime(dt_str, _dt_format[0])
+    return dt
+
+def _isDayTime(dt):
+    """
+    Returns true if time is not good for observing.
+    """
+    return 6 <= dt.hour < 20
+
+def _visitTimes(start_time, interval_sec, count):
+    """
+    Generator for visit times.
+    """
+    dt = start_time
+    delta = timedelta(seconds=interval_sec)
+    while count > 0:
+        if not _isDayTime(dt):
+            yield dt
+            count -= 1
+        dt += delta
+
+
+#----------------
+#  Application --
+#----------------
+
+class APProto(object):
+
+    def __init__(self):
+
+        self.lastObjectId = 1000000000
+        self.lastSourceId = 0
+
+        descr = 'Script which simulates AP workflow access to L1 database.'
+        parser = ArgumentParser(description=descr)
+        parser.add_argument('-v', '--verbose', dest='verbose', action='count', default=0,
+                            help='More verbose output, can use several times.')
+        parser.add_argument('-n', '--num-visits', type=int, default=1, metavar='NUMBER',
+                            help='Numer of visits to process, def: 1')
+        parser.add_argument('-i', '--interval', type=int, default=45, metavar='SECONDS',
+                            help='Interval between visits in seconds, def: 45')
+        parser.add_argument('-c', '--config', default="l1db.cfg", metavar='PATH',
+                            help='Name of the database config file, def: l1db.cfg')
+        parser.add_argument('-e', '--explain', default=False, action='store_true',
+                            help='Run queries with EXPLAIN')
+        parser.add_argument('--start-time', type=_timeParse, default=None,
+                            help='Starting time, format: ' + _dt_format[1] +
+                            '. Time is assumed to be in UTC time zone. Used only at'
+                            ' first invocation to intialize database.')
+        parser.add_argument('--start-visit-id', type=int, default=1,
+                            help='Starting visit ID. Used only at first invocation'
+                            ' to intialize database. def: 1')
+
+        parser.add_argument('sources_file', help='Name of input file with sources')
+        # add more command line options
+        self.args = parser.parse_args()
+
+        # configure logging
+        _configLogger(self.args.verbose)
+
+
+    def run(self):
+
+        # instantiate db interface
+        db = l1db.L1db(self.args.config)
+
+        # Initialize starting values from database visits table
+        last_visit = db.lastVisit()
+        if last_visit is None:
+            # database is empty
+            if self.args.start_time is None:
+                _LOG.error('Database is not initialized, --start-time option is required')
+                return 1
+        else:
+            self.args.start_visit_id = last_visit.visitId + 1
+            self.args.start_time = last_visit.visitTime + timedelta(seconds=self.args.interval)
+
+        # read sources file
+        _LOG.info("Start loading variable sources from %r", self.args.sources_file)
+        var_sources = numpy.load(self.args.sources_file)
+        _LOG.info("Finished loading variable sources, count = %s", len(var_sources))
+
+        # diaObjectId for last new DIA object, for variable sources we use their
+        # index as objectId, for transients we want to use ID outside that range
+        if last_visit is not None and last_visit.lastObjectId is not None:
+            self.lastObjectId = max(self.lastObjectId, last_visit.lastObjectId)
+        if self.lastObjectId < len(var_sources):
+            _LOG.error('next object id is too low: %s', nextObjectId)
+            return 1
+        _LOG.debug("lastObjectId: %s", self.lastObjectId)
+
+        # diaSourceId for last DIA source stored in database
+        if last_visit is not None and last_visit.lastSourceId is not None:
+            self.lastSourceId = max(self.lastSourceId, last_visit.lastSourceId)
+        _LOG.debug("lastSourceId: %s", self.lastSourceId)
+
+        # loop over visits
+        visitTimes = _visitTimes(self.args.start_time, self.args.interval, self.args.num_visits)
+        for visit_id, dt in enumerate(visitTimes, self.args.start_visit_id):
+
+            _LOG.info("Processing visit %s at %s", visit_id, dt)
+
+            # point telescope in random southern direction
+            pointing_xyz = generators.rand_sphere_xyz(1, -1)[0]
+            pointing_v = Vector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
+            ra = LonLat.longitudeOf(pointing_v).asDegrees()
+            decl = LonLat.latitudeOf(pointing_v).asDegrees()
+
+            _LOG.info("Pointing ra, decl = %s, %s; xyz = %s", ra, decl, pointing_xyz)
+
+            # Simulating difference image analysis
+            dia = DIA.DIA(pointing_xyz, constants.FOV_rad, var_sources,
+                          constants.N_FALSE_PER_VISIT + constants.N_TRANS_PER_VISIT)
+            sources, indices = dia.makeSources()
+            n_sources = len(sources)
+            _LOG.info("DIA generated %s sources", n_sources)
+
+            # print current database row counts
+            counts = db.tableRowCount()
+            for tbl in sorted(counts.keys()):
+                _LOG.info('%s row count: %s', tbl, counts[tbl])
+
+            # Retrieve DiaObjects (latest versions) from database for matching,
+            # this will produce wider coverage so further filtering is needed
+            latest_objects = db.getDiaObjects(pointing_xyz, constants.FOV_rad,
+                                              False, explain=self.args.explain)
+            _LOG.info('database found %s objects', len(latest_objects))
+
+            # filter database obects to a mask
+            latest_objects = self._filterDiaObjects(latest_objects, pointing_xyz, constants.FOV_rad)
+            _LOG.info('after filtering %s objects', len(latest_objects))
+
+            # create all new DiaObjects
+            objects = self._makeDiaObjects(sources, indices, dt)
+
+            # do forced photometry on non-detected objects (extends objects)
+            self._forcedPhotometry(objects, latest_objects, dt)
+
+            # store new versions of objects
+            db.storeDiaObjects(objects, dt, explain=self.args.explain)
+
+            # Store all sources
+            srcs = self._makeDiaSources(sources, indices, visit_id)
+
+            # store all sources
+            db.storeDiaSources(srcs, explain=self.args.explain)
+
+            # make forced sources for every object
+            fsrcs = self._makeDiaForcedSources(objects, visit_id)
+
+            # store all forced sources
+            db.storeDiaForcedSources(fsrcs, explain=self.args.explain)
+
+            # store last visit info
+            db.saveVisit(visit_id, dt)
+
+
+    def _filterDiaObjects(self, latest_objects, pointing_xyz, FOV_rad):
+        """
+        Filter out objects from a list which are outside visible area.
+        """
+        cos_min = math.cos(FOV_rad / 2)
+        dir_p = Vector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
+        # _LOG.debug('cos_min: %s dir_p: %s', cos_min, dir_p)
+
+        res = []
+        for obj in latest_objects:
+            lonLat = LonLat.fromDegrees(obj.ra, obj.decl)
+            dir_obj = UnitVector3d(lonLat)
+            cos_obj = dir_obj.dot(dir_p)
+            # _LOG.debug('%s %s %s', cos_obj, dir_obj, lonLat)
+            if cos_obj > cos_min:
+                res.append(obj)
+
+        return res
+
+
+    def _makeDiaObjects(self, sources, indices, dt):
+        """
+        Over-simplified implementation of source-to-object matching and
+        new DiaObject generation.
+
+        Currently matching is based on info passed along by source
+        generator and does not even use DiaObjects from database.
+        """
+
+        objects = []
+        n_trans = 0
+        for i in range(len(sources)):
+
+            xyz = sources[i]
+            var_idx = indices[i]
+            if var_idx < 0:
+                # non-matched source, create new DiaObject
+                self.lastObjectId += 1
+                var_idx = self.lastObjectId
+                # update index with newly-generated one
+                indices[i] = var_idx
+                n_trans += 1
+
+            v3d = Vector3d(xyz[0], xyz[1], xyz[2])
+            ra = LonLat.longitudeOf(v3d).asDegrees()
+            decl = LonLat.latitudeOf(v3d).asDegrees()
+            dir_v = UnitVector3d(v3d)
+            index = htmIndex(dir_v, constants.HTM_LEVEL)
+            obj = l1db.DiaObject(diaObjectId=var_idx, validityStart=dt, validityEnd=None,
+                                 lastNonForcedSource=dt,
+                                 ra=ra, decl=decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
+                                 muRa=0., muRaSigma=0., muDecl=0., muDecSigma=0., muRa_muDeclCov=0.,
+                                 parallax=0., parallaxSigma=0., muRa_parallax_Cov=0., muDecl_parallax_Cov=0.,
+                                 lnL=0., chi2=0., N=0,
+                                 flags=0, htmId20=index)
+            objects += [obj]
+        _LOG.info('found %s matching objects and %s transients/noise', len(objects) - n_trans, n_trans)
+
+        return objects
+
+    def _forcedPhotometry(self, objects, latest_objects, dt):
+        """
+        Do forced photometry on latest_objects which are not in objects.
+
+        Extends objects list with new DiaObjects.
+        """
+
+        # Ids of the detected objects
+        ids = set(obj.diaObjectId for obj in objects)
+
+        for obj in latest_objects:
+            # only do it for 30 days after last detection
+            if obj.diaObjectId in ids: continue
+            delta = dt - obj.lastNonForcedSource
+            if delta > timedelta(days=30): continue
+
+            # make new object with the same ID
+            new_obj = l1db.DiaObject(diaObjectId=obj.diaObjectId, validityStart=dt, validityEnd=None,
+                                     lastNonForcedSource=obj.lastNonForcedSource,
+                                     ra=obj.ra, decl=obj.decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
+                                     muRa=0., muRaSigma=0., muDecl=0., muDecSigma=0., muRa_muDeclCov=0.,
+                                     parallax=0., parallaxSigma=0., muRa_parallax_Cov=0., muDecl_parallax_Cov=0.,
+                                     lnL=0., chi2=0., N=0,
+                                     flags=0, htmId20=obj.htmId20)
+            objects.append(new_obj)
+
+    def _makeDiaSources(self, sources, indices, visit_id):
+        """
+        Generate set of DiaSources to store in a database
+        """
+
+        srcs = []
+        for i in range(len(sources)):
+
+            xyz = sources[i]
+            var_idx = indices[i]
+
+            v3d = Vector3d(xyz[0], xyz[1], xyz[2])
+            ra = LonLat.longitudeOf(v3d).asDegrees()
+            decl = LonLat.latitudeOf(v3d).asDegrees()
+            dir_v = UnitVector3d(v3d)
+            index = htmIndex(dir_v, constants.HTM_LEVEL)
+
+            self.lastSourceId += 1
+            src = l1db.DiaSource(diaSourceId=self.lastSourceId, ccdVisitId=visit_id,
+                                 diaObjectId=var_idx, filterName='x',
+                                 prv_procOrder=0, midPointTai=0.,
+                                 ra=ra, decl=decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
+                                 x=0., xSigma=0., y=0., ySigma=0., x_y_Cov=0., snr=5.,
+                                 flags=0, htmId20=index)
+            srcs += [src]
+
+        return srcs
+
+
+    def _makeDiaForcedSources(self, objects, visit_id):
+        """
+        Generate set of DiaForcedSources to store in a database
+        """
+
+        fsrcs = []
+        for obj in objects:
+
+            src = l1db.DiaForcedSource(diaObjectId=obj.diaObjectId, ccdVisitId=visit_id,
+                                       psFlux=0., psFlux_Sigma=0.,
+                                       x=0., y=0.,
+                                       flags=0)
+            fsrcs += [src]
+
+        return fsrcs
+
+#
+#  run application when imported as a main module
+#
+if __name__ == "__main__":
+    app = APProto()
+    rc = app.run()
+    sys.exit(rc)

@@ -63,7 +63,7 @@ def main():
     counts = int(args.counts * area / visit_area)
     logging.info("Total sources: %d", counts)
 
-    points = generators.rand_sphere_xyz(counts)
+    points = generators.rand_sphere_xyz(counts, args.hemi)
     numpy.save(args.file, points)
 
 #
