@@ -2,6 +2,7 @@ setupRequired(db)
 setupRequired(python)
 setupRequired(scons)
 setupRequired(sconsUtils)
+setupRequired(sphgeom)
 setupRequired(sqlalchemy)
 
 envPrepend(PATH, ${PRODUCT_DIR}/bin)
