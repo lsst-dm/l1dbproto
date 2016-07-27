@@ -26,4 +26,4 @@ N_TRANS_PER_VISIT = 100    # average number of transients per visit
 N_FALSE_PER_VISIT = 5050   # average number of false positives per visit
 
 HTM_LEVEL = 20
-HTM_MAX_RANGES = 40
+HTM_MAX_RANGES = 64
