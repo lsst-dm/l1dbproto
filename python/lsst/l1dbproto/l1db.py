@@ -17,13 +17,31 @@ from . import constants, timer
 from lsst.db import engineFactory
 from lsst import sphgeom
 import sqlalchemy
-from sqlalchemy import Column, Index, MetaData, PrimaryKeyConstraint, sql, Table
+from sqlalchemy import (Column, engine, event, func, Index, MetaData, 
+                        PrimaryKeyConstraint, sql, Table)
 
 #----------------------------------
 # Local non-exported definitions --
 #----------------------------------
 
 _LOG = logging.getLogger(__name__)
+
+# If this is set to True then we'll execute EXPLAIN instead of original query
+_explain = False
+
+@event.listens_for(engine.Engine, "before_cursor_execute", retval=True)
+def _do_analyze(conn, cursor, statement, parameters, context, executemany):
+    """
+    Intercept query to be executed and prepend it with EXPLAIN is _explain flag is set.
+    """
+    if _explain:
+        if conn.engine.name == 'mysql':
+            statement = "EXPLAIN EXTENDED " + statement
+        else:
+            statement = "EXPLAIN " + statement
+        _LOG.debug("stmt: %s", statement)
+        _LOG.debug("params: %s", parameters)
+    return statement, parameters
 
 #------------------------
 # Exported definitions --
@@ -62,6 +80,9 @@ def _row2nt(row, tupletype):
     return tupletype(**dict(row))
 
 def _htm_repr(index, level):
+    """
+    Human-friendly representation of HTM index.
+    """
     res = ''
     while level >= 0:
         res = ('0', '1', '2', '3')[index % 4] + res
@@ -139,10 +160,10 @@ class L1db(object):
         Returns dictionary with the table names and row counts.
         """
         res = {}
-        tables = ['DiaObject', 'DiaSource', 'DiaForcedSource']
+        tables = [self._objects, self._sources, self._forcedSources]
         for table in tables:
-            q = 'SELECT COUNT(*) FROM ' + table
-            count = self._engine.scalar(sql.text(q))
+            stmt = sql.select([func.count()]).select_from(table)
+            count = self._engine.scalar(stmt)
             res [table] = count
 
         return res
@@ -157,13 +178,20 @@ class L1db(object):
         """
 
         # decide what columns we need
-        q = "SELECT "
         objects = self._objects
         if fullRecord:
-            q += "* "
+            stmt = sql.select()
         else:
-            q += "diaObjectId, lastNonForcedSource, ra, decl, raSigma, declSigma, ra_decl_Cov, htmId20 "
-        q += "FROM DiaObject "
+            columns = [objects.c.diaObjectId,
+                       objects.c.lastNonForcedSource,
+                       objects.c.ra,
+                       objects.c.decl,
+                       objects.c.raSigma,
+                       objects.c.declSigma,
+                       objects.c.ra_decl_Cov,
+                       objects.c.htmId20]
+            stmt = sql.select(columns)
+        stmt = stmt.select_from(objects)
 
         # determine indices that we need
         dir_v = sphgeom.UnitVector3d(xyz[0], xyz[1], xyz[2])
@@ -175,31 +203,26 @@ class L1db(object):
 
         # build selection
         exprlist = []
-        params = {}
         for i, (low, up) in enumerate(indices.ranges()):
             up -= 1
             if low == up:
-                exprlist.append("htmId20 = :htm{}".format(i))
-                params["htm{}".format(i)] = low
+                exprlist.append(objects.c.htmId20 == low)
             else:
-                exprlist.append("htmId20 BETWEEN :htm_low{0} AND :htm_up{0}".format(i))
-                params["htm_low{}".format(i)] = low
-                params["htm_up{}".format(i)] = up
-        q += "WHERE (" + " OR ".join(exprlist) + ") "
+                exprlist.append(sql.expression.between(objects.c.htmId20, low, up))
+        stmt.append_whereclause(sql.expression.or_(*exprlist))
 
         # select latest version of objects
-        q += " AND validityEnd IS :vend"
-        params["vend".format(i)] = None
+        stmt.append_whereclause(objects.c.validityEnd == None)
 
-        _LOG.debug("q: %s", q)
+        _LOG.debug("stmt: %s", stmt.compile(compile_kwargs={"literal_binds": True}))
 
         if explain:
             # run the same query with explain
-            self._explain(q, params, self._engine)
+            self._explain(stmt, self._engine)
 
         # execute select
         with timer.Timer('DiaObject select'):
-            res = self._engine.execute(sql.text(q), params)
+            res = self._engine.execute(stmt)
         obj_type = DiaObject if fullRecord else DiaObject_short
         objects = [_row2nt(row, obj_type) for row in res]
         _LOG.debug("found %s DiaObjects", len(objects))
@@ -214,22 +237,25 @@ class L1db(object):
 
         ids = sorted([obj.diaObjectId for obj in objs])
 
+        table = self._objects
+
         # everything to be done in single transaction
         with self._engine.begin() as conn:
 
             # truncate existing validity intervals
-            q = "UPDATE DiaObject SET validityEnd = :dt WHERE diaObjectId IN ("
-            q += ', '.join([str(i) for i in ids])
-            q += ") AND validityEnd IS :vend"
-            params = {'dt': dt, 'vend': None}
+            stmt = table.update().\
+                where(table.c.diaObjectId.in_(tuple(ids))).\
+                where(table.c.validityEnd == None).\
+                values(validityEnd=dt)
+
+            # _LOG.debug("stmt: %s", stmt.compile(compile_kwargs={"literal_binds": True}))
 
             if explain:
                 # run the same query with explain
-                self._explain(q, params, conn)
+                self._explain(stmt, conn)
 
-            # _LOG.debug("update: %s", q)
             with timer.Timer('DiaObject truncate'):
-                res = conn.execute(sql.text(q), params)
+                res = conn.execute(stmt)
             _LOG.debug("truncated %s intervals", res.rowcount)
 
             # insert new versions
@@ -276,7 +302,7 @@ class L1db(object):
         DATETIME = sqlalchemy.types.TIMESTAMP
         BIGINT = sqlalchemy.types.BigInteger
         INTEGER = INT = sqlalchemy.types.Integer
-        BLOB = sqlalchemy.types.BLOB
+        BLOB = sqlalchemy.types.LargeBinary
         CHAR = sqlalchemy.types.CHAR
 
         diaObject = Table('DiaObject', self._metadata,
@@ -444,7 +470,7 @@ class L1db(object):
             Index('IDX_DiaSource_diaObjectId', 'diaObjectId'),
             Index('IDX_DiaSource_ssObjectId', 'ssObjectId'),
             Index('IDX_DiaSource_filterName', 'filterName'),
-            Index('IDX_DiaObject_htmId20', 'htmId20'),
+            Index('IDX_DiaSource_htmId20', 'htmId20'),
             mysql_engine=mysql_engine)
 
         ssObject = Table('SSObject', self._metadata,
@@ -608,16 +634,25 @@ class L1db(object):
         if table is None:
             table = Table(name, self._metadata, autoload=True)
             self._tables[name] = table
+            _LOG.debug("read table schema for %s: %s", name, table.c)
         return table
 
-    def _explain(self, q, params, conn):
+    def _explain(self, stmt, conn):
         # run the query with explain
-        _LOG.info("explain for query: %s...", q[:32])
-        q = "EXPLAIN EXTENDED " + q
-        res = conn.execute(sql.text(q), params)
-        _LOG.info("explain: %s", res.keys())
-        for row in res:
-            _LOG.info("explain: %s", row)
+        global _explain
+
+        q = str(stmt.compile())
+        _LOG.info("explain for query: %s...", q[:64])
+
+        _explain = True
+        res = conn.execute(stmt)
+        _explain = False
+        if res.returns_rows:
+            _LOG.info("explain: %s", res.keys())
+            for row in res:
+                _LOG.info("explain: %s", row)
+        else:
+            _LOG.info("EXPLAIN returned nothing")
 
     def _storeObjects(self, object_type, objects, conn, table, explain=False):
         """
@@ -631,17 +666,13 @@ class L1db(object):
         @param explain:     If True then do EXPLAIN on INSERT query
         """
 
-        keys = [key for key in table.c.keys() if key in object_type._fields]
-        q = "INSERT INTO " + table.name + " ("
-        q += ', '.join(keys)
-        q += ") VALUES ("
-        q += ', '.join([':' + key for key in keys])
-        q += ")"
-        _LOG.debug("insert: %s", q)
-        values = [obj._asdict() for obj in objects]
         if explain:
             # run the same query with explain
-            self._explain(q, values[0], conn)
+            stmt = table.insert().values(objects[0]._asdict())
+            self._explain(stmt, conn)
+
+        stmt = table.insert().values([obj._asdict() for obj in objects])
+        # _LOG.debug("stmt: %s", stmt.compile(compile_kwargs={"literal_binds": True}))
         with timer.Timer(table.name + ' insert'):
-            res = conn.execute(sql.text(q), values)
+            res = conn.execute(stmt)
         _LOG.debug("inserted %s intervals", res.rowcount)

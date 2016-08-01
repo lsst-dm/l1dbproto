@@ -214,7 +214,7 @@ class APProto(object):
 
         res = []
         for obj in latest_objects:
-            lonLat = LonLat.fromDegrees(obj.ra, obj.decl)
+            lonLat = LonLat.fromDegrees(float(obj.ra), float(obj.decl))
             dir_obj = UnitVector3d(lonLat)
             cos_obj = dir_obj.dot(dir_p)
             # _LOG.debug('%s %s %s', cos_obj, dir_obj, lonLat)
@@ -238,7 +238,7 @@ class APProto(object):
         for i in range(len(sources)):
 
             xyz = sources[i]
-            var_idx = indices[i]
+            var_idx = int(indices[i])
             if var_idx < 0:
                 # non-matched source, create new DiaObject
                 self.lastObjectId += 1
@@ -283,7 +283,8 @@ class APProto(object):
             # make new object with the same ID
             new_obj = l1db.DiaObject(diaObjectId=obj.diaObjectId, validityStart=dt, validityEnd=None,
                                      lastNonForcedSource=obj.lastNonForcedSource,
-                                     ra=obj.ra, decl=obj.decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
+                                     ra=float(obj.ra), decl=float(obj.decl),
+                                     raSigma=0., declSigma=0., ra_decl_Cov=0.,
                                      muRa=0., muRaSigma=0., muDecl=0., muDecSigma=0., muRa_muDeclCov=0.,
                                      parallax=0., parallaxSigma=0., muRa_parallax_Cov=0., muDecl_parallax_Cov=0.,
                                      lnL=0., chi2=0., N=0,
@@ -299,7 +300,7 @@ class APProto(object):
         for i in range(len(sources)):
 
             xyz = sources[i]
-            var_idx = indices[i]
+            var_idx = int(indices[i])
 
             v3d = Vector3d(xyz[0], xyz[1], xyz[2])
             ra = LonLat.longitudeOf(v3d).asDegrees()
