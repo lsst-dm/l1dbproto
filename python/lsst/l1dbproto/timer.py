@@ -45,7 +45,7 @@ class Timer(object):
     #----------------
     #  Constructor --
     #----------------
-    def __init__(self, name, doPrint=True):
+    def __init__(self, name="", doPrint=True):
         """
         @param name:  Time name, will be printed together with statistics
         @param doPrint: if True then print statistics on exist from context
@@ -72,6 +72,7 @@ class Timer(object):
         ru = resource.getrusage(resource.RUSAGE_SELF)
         self._startUser = ru.ru_utime
         self._startSys = ru.ru_stime
+        return self
 
     def stop(self):
         """
@@ -85,13 +86,16 @@ class Timer(object):
             self._startReal = None
             self._startUser = None
             self._startSys = None
+        return self
 
     def dump(self):
         """
         Dump timer statistics
         """
+        _LOG.info("%s", self)
+        return self
 
-        # If timer is running then add current statistics too
+    def __str__(self):
         real = self._sumReal
         user = self._sumUser
         sys = self._sumSys
@@ -100,7 +104,10 @@ class Timer(object):
             ru = resource.getrusage(resource.RUSAGE_SELF)
             user += ru.ru_utime - self._startUser
             sys += ru.ru_stime - self._startSys
-        _LOG.info("%s: real=%.3f user=%.3f sys=%.3f", self._name, real, user, sys)
+        info = "real=%.3f user=%.3f sys=%.3f" % (real, user, sys)
+        if self._name:
+            info = self._name + ": " + info
+        return info
 
     def __enter__(self):
         """

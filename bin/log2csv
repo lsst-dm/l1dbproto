@@ -1,0 +1,158 @@
+#!/bin/env python
+
+"""
+Script to read ap_proto logs and produce CSV file.
+"""
+
+from __future__ import print_function
+
+#--------------------------------
+#  Imports of standard modules --
+#--------------------------------
+from argparse import ArgumentParser
+from collections import defaultdict
+import logging
+import sys
+
+#-----------------------------
+# Imports for other modules --
+#-----------------------------
+
+#---------------------
+# Local definitions --
+#---------------------
+
+def _configLogger(verbosity):
+    """ configure logging based on verbosity level """
+
+    levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
+    logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+    logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
+
+# dictionary with visit statistics
+_values = defaultdict(lambda: "NULL")
+
+def _new_visit(line):
+    """
+    Initialize data structures for new visit.
+    """
+    _values.clear()
+    words = line.split()
+    visit = int(words[-4])
+    _values['visit'] = visit
+
+def _parse_counts(line):
+    """
+    Parse line with table row counts.
+    """
+    words = line.split()
+    count = int(words[-1])
+    if "DiaObject" in words:
+        _values['obj_count'] = count
+    elif "DiaSource" in words:
+        _values['src_count'] = count
+    elif "DiaForcedSource" in words:
+        _values['fsrc_count'] = count
+
+def _parse_timers(line):
+    """
+    Parse line with timer info.
+    """
+    words = line.replace('=', ' ').split()
+    real = float(words[-5])
+    cpu = float(words[-3]) + float(words[-1])
+    if " DiaObject select: " in line:
+        _values['obj_select_real'] = real
+        _values['obj_select_cpu'] = cpu
+    elif " DiaObject truncate: " in line:
+        _values['obj_trunc_real'] = real
+        _values['obj_trunc_cpu'] = cpu
+    elif " DiaObject insert: " in line:
+        _values['obj_insert_real'] = real
+        _values['obj_insert_cpu'] = cpu
+    elif " DiaSource insert: " in line:
+        _values['src_insert_real'] = real
+        _values['src_insert_cpu'] = cpu
+    elif " DiaForcedSource insert: " in line:
+        _values['fsrc_insert_real'] = real
+        _values['fsrc_insert_cpu'] = cpu
+    elif " L1-store: " in line:
+        _values['store_real'] = real
+        _values['store_cpu'] = cpu
+    elif " Finished processing visit " in line:
+        _values['visit_real'] = real
+        _values['visit_cpu'] = cpu
+
+def _parse_select_count(line):
+    """
+    Parse line with counter of selected rows
+    """
+    words = line.split()
+    count = int(words[-2])
+    if "database found" in line:
+        _values['obj_selected'] = count
+    elif "after filtering" in line:
+        _values['obj_in_fov'] = count
+
+# List of columns (keys in _values dictionary)
+_cols = ['visit',
+         'obj_select_real', 'obj_select_cpu', 'obj_trunc_real', 'obj_trunc_cpu',
+         'obj_insert_real', 'obj_insert_cpu', 'src_insert_real', 'src_insert_cpu',
+         'fsrc_insert_real', 'fsrc_insert_cpu', 'store_real', 'store_cpu',
+         'visit_real', 'visit_cpu', 'obj_selected', 'obj_in_fov',
+         'obj_count', 'src_count', 'fsrc_count']
+
+# Flag to print CSV header line once
+_header = True
+
+def _end_visit(line):
+    """
+    Dump collected information
+    """
+    global _header
+    if _header:
+        print(','.join(_cols))
+        _header = False
+    print(','.join(str(_values[c]) for c in _cols))
+
+# Map line sibstring to method
+_dispatch = [("Start processing visit", _new_visit),
+             (" row count: ", _parse_counts),
+             (": real=", _parse_timers),
+             ("ap_proto: database found ", _parse_select_count),
+             ("ap_proto: after filtering ", _parse_select_count),
+             ("Finished processing visit", _end_visit),            # must be last
+             ]
+
+#---------------------------------
+#  Application class definition --
+#---------------------------------
+
+def main():
+
+    descr = 'One-line application description.'
+    parser = ArgumentParser(description=descr)
+    parser.add_argument('-v', '--verbose', action='count', default=0,
+                        help='More verbose output, can use several times.')
+    parser.add_argument('file', help='Name of input log file', nargs='+')
+    args = parser.parse_args()
+
+    # configure logging
+    _configLogger(args.verbose)
+
+    # open each file in order
+    for input in args.file:
+        for line in open(input):
+            for match, method in _dispatch:
+                # if line matches then call corresponding method
+                if match in line:
+                    method(line)
+
+
+#
+#  run application when imported as a main module
+#
+if __name__ == "__main__":
+    rc = main()
+    sys.exit(rc)
