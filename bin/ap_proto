@@ -22,7 +22,7 @@ import sys
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
-from lsst.l1dbproto import constants, DIA, generators, l1db
+from lsst.l1dbproto import constants, DIA, generators, l1db, timer
 from lsst.sphgeom import htmIndex, LonLat, UnitVector3d, Vector3d
 
 #---------------------
@@ -147,62 +147,73 @@ class APProto(object):
         visitTimes = _visitTimes(self.args.start_time, self.args.interval, self.args.num_visits)
         for visit_id, dt in enumerate(visitTimes, self.args.start_visit_id):
 
-            _LOG.info("Processing visit %s at %s", visit_id, dt)
+            _LOG.info("+++ Start processing visit %s at %s", visit_id, dt)
+            loop_timer = timer.Timer().start()
 
-            # point telescope in random southern direction
-            pointing_xyz = generators.rand_sphere_xyz(1, -1)[0]
-            pointing_v = Vector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
-            ra = LonLat.longitudeOf(pointing_v).asDegrees()
-            decl = LonLat.latitudeOf(pointing_v).asDegrees()
+            with timer.Timer("DIA"):
+                # point telescope in random southern direction
+                pointing_xyz = generators.rand_sphere_xyz(1, -1)[0]
+                pointing_v = Vector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
+                ra = LonLat.longitudeOf(pointing_v).asDegrees()
+                decl = LonLat.latitudeOf(pointing_v).asDegrees()
 
-            _LOG.info("Pointing ra, decl = %s, %s; xyz = %s", ra, decl, pointing_xyz)
+                _LOG.info("Pointing ra, decl = %s, %s; xyz = %s", ra, decl, pointing_xyz)
 
-            # Simulating difference image analysis
-            dia = DIA.DIA(pointing_xyz, constants.FOV_rad, var_sources,
-                          constants.N_FALSE_PER_VISIT + constants.N_TRANS_PER_VISIT)
-            sources, indices = dia.makeSources()
-            n_sources = len(sources)
-            _LOG.info("DIA generated %s sources", n_sources)
+                # Simulating difference image analysis
+                dia = DIA.DIA(pointing_xyz, constants.FOV_rad, var_sources,
+                              constants.N_FALSE_PER_VISIT + constants.N_TRANS_PER_VISIT)
+                sources, indices = dia.makeSources()
+                n_sources = len(sources)
+                _LOG.info("DIA generated %s sources", n_sources)
 
-            # print current database row counts
-            counts = db.tableRowCount()
-            for tbl in sorted(counts.keys()):
-                _LOG.info('%s row count: %s', tbl, counts[tbl])
+            # print current database row counts, this takes long time
+            # so only do it once in a while
+            if visit_id % 10 == 0:
+                counts = db.tableRowCount()
+                for tbl in sorted(counts.keys()):
+                    _LOG.info('%s row count: %s', tbl, counts[tbl])
 
-            # Retrieve DiaObjects (latest versions) from database for matching,
-            # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(pointing_xyz, constants.FOV_rad,
-                                              False, explain=self.args.explain)
-            _LOG.info('database found %s objects', len(latest_objects))
+            with timer.Timer("L1-read"):
 
-            # filter database obects to a mask
-            latest_objects = self._filterDiaObjects(latest_objects, pointing_xyz, constants.FOV_rad)
-            _LOG.info('after filtering %s objects', len(latest_objects))
+                # Retrieve DiaObjects (latest versions) from database for matching,
+                # this will produce wider coverage so further filtering is needed
+                latest_objects = db.getDiaObjects(pointing_xyz, constants.FOV_rad,
+                                                  False, explain=self.args.explain)
+                _LOG.info('database found %s objects', len(latest_objects))
 
-            # create all new DiaObjects
-            objects = self._makeDiaObjects(sources, indices, dt)
+                # filter database obects to a mask
+                latest_objects = self._filterDiaObjects(latest_objects, pointing_xyz, constants.FOV_rad)
+                _LOG.info('after filtering %s objects', len(latest_objects))
 
-            # do forced photometry on non-detected objects (extends objects)
-            self._forcedPhotometry(objects, latest_objects, dt)
+            with timer.Timer("S2O-matching"):
 
-            # store new versions of objects
-            db.storeDiaObjects(objects, dt, explain=self.args.explain)
+                # create all new DiaObjects
+                objects = self._makeDiaObjects(sources, indices, dt)
 
-            # Store all sources
-            srcs = self._makeDiaSources(sources, indices, visit_id)
+                # do forced photometry on non-detected objects (extends objects)
+                self._forcedPhotometry(objects, latest_objects, dt)
 
-            # store all sources
-            db.storeDiaSources(srcs, explain=self.args.explain)
+                # Store all sources
+                srcs = self._makeDiaSources(sources, indices, visit_id)
 
-            # make forced sources for every object
-            fsrcs = self._makeDiaForcedSources(objects, visit_id)
+                # make forced sources for every object
+                fsrcs = self._makeDiaForcedSources(objects, visit_id)
 
-            # store all forced sources
-            db.storeDiaForcedSources(fsrcs, explain=self.args.explain)
+            with timer.Timer("L1-store"):
+
+                # store new versions of objects
+                db.storeDiaObjects(objects, dt, explain=self.args.explain)
+
+                # store all sources
+                db.storeDiaSources(srcs, explain=self.args.explain)
+
+                # store all forced sources
+                db.storeDiaForcedSources(fsrcs, explain=self.args.explain)
 
             # store last visit info
             db.saveVisit(visit_id, dt)
 
+            _LOG.info("--- Finished processing visit %s, time: %s", visit_id, loop_timer)
 
     def _filterDiaObjects(self, latest_objects, pointing_xyz, FOV_rad):
         """

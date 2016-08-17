@@ -7,6 +7,7 @@ Module defining methods for generating random things.
 #--------------------------------
 import math
 import numpy
+import logging
 
 #-----------------------------
 # Imports for other modules --
@@ -87,4 +88,4 @@ def rand_cone_xyz(direction, open_angle, n=1, seed=None):
 
     # rotate
     R = _rotation_matrix(numpy.array([0., 0., 1.]), direction)
-    return numpy.inner(res, R)
+    return numpy.inner(res, R).A

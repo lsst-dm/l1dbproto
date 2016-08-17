@@ -6,6 +6,7 @@ Module defining L1db class and related methods.
 #  Imports of standard modules --
 #--------------------------------
 from collections import namedtuple
+from datetime import datetime
 import logging
 import math
 import sys
@@ -26,22 +27,38 @@ from sqlalchemy import (Column, engine, event, func, Index, MetaData,
 
 _LOG = logging.getLogger(__name__)
 
-# If this is set to True then we'll execute EXPLAIN instead of original query
-_explain = False
+class Timer(object):
 
-@event.listens_for(engine.Engine, "before_cursor_execute", retval=True)
-def _do_analyze(conn, cursor, statement, parameters, context, executemany):
-    """
-    Intercept query to be executed and prepend it with EXPLAIN is _explain flag is set.
-    """
-    if _explain:
-        if conn.engine.name == 'mysql':
-            statement = "EXPLAIN EXTENDED " + statement
-        else:
-            statement = "EXPLAIN " + statement
-        _LOG.debug("stmt: %s", statement)
-        _LOG.debug("params: %s", parameters)
-    return statement, parameters
+    def __init__(self, name):
+        self._timer1 = timer.Timer(name)
+        self._timer2 = timer.Timer(name + " (before/after cursor)")
+
+    def __enter__(self):
+        """
+        Enter context, start timer
+        """
+        event.listen(engine.Engine, "before_cursor_execute", self._start_timer)
+        event.listen(engine.Engine, "after_cursor_execute", self._stop_timer)
+        self._timer1.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Exit context, stop and dump timer
+        """
+        if exc_type is None:
+            self._timer1.stop()
+            self._timer1.dump()
+        event.remove(engine.Engine, "before_cursor_execute", self._start_timer)
+        event.remove(engine.Engine, "after_cursor_execute", self._stop_timer)
+        return False
+
+    def _start_timer(self, conn, cursor, statement, parameters, context, executemany):
+        self._timer2.start()
+
+    def _stop_timer(self, conn, cursor, statement, parameters, context, executemany):
+        self._timer2.stop()
+        self._timer2.dump()
 
 #------------------------
 # Exported definitions --
@@ -177,21 +194,15 @@ class L1db(object):
         @param fullRecord: if True read whole records from database
         """
 
+        query = "SELECT "
+
         # decide what columns we need
-        objects = self._objects
+        table = self._objects
         if fullRecord:
-            stmt = sql.select()
+            query += "*"
         else:
-            columns = [objects.c.diaObjectId,
-                       objects.c.lastNonForcedSource,
-                       objects.c.ra,
-                       objects.c.decl,
-                       objects.c.raSigma,
-                       objects.c.declSigma,
-                       objects.c.ra_decl_Cov,
-                       objects.c.htmId20]
-            stmt = sql.select(columns)
-        stmt = stmt.select_from(objects)
+            query += '"diaObjectId","lastNonForcedSource","ra","decl","raSigma","declSigma","ra_decl_Cov","htmId20"'
+        query += ' FROM "' + table.name + '" WHERE ('
 
         # determine indices that we need
         dir_v = sphgeom.UnitVector3d(xyz[0], xyz[1], xyz[2])
@@ -203,26 +214,26 @@ class L1db(object):
 
         # build selection
         exprlist = []
-        for i, (low, up) in enumerate(indices.ranges()):
+        for low, up in indices.ranges():
             up -= 1
             if low == up:
-                exprlist.append(objects.c.htmId20 == low)
+                exprlist.append('"htmId20" = ' + str(low))
             else:
-                exprlist.append(sql.expression.between(objects.c.htmId20, low, up))
-        stmt.append_whereclause(sql.expression.or_(*exprlist))
+                exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, up))
+        query += ' OR '.join(exprlist)
 
         # select latest version of objects
-        stmt.append_whereclause(objects.c.validityEnd == None)
+        query += ') AND "validityEnd" IS NULL'
 
-        _LOG.debug("stmt: %s", stmt.compile(compile_kwargs={"literal_binds": True}))
+        _LOG.debug("query: %s", query)
 
         if explain:
             # run the same query with explain
-            self._explain(stmt, self._engine)
+            self._explain(query, self._engine)
 
         # execute select
-        with timer.Timer('DiaObject select'):
-            res = self._engine.execute(stmt)
+        with Timer('DiaObject select'):
+            res = self._engine.execute(sql.text(query))
         obj_type = DiaObject if fullRecord else DiaObject_short
         objects = [_row2nt(row, obj_type) for row in res]
         _LOG.debug("found %s DiaObjects", len(objects))
@@ -243,19 +254,20 @@ class L1db(object):
         with self._engine.begin() as conn:
 
             # truncate existing validity intervals
-            stmt = table.update().\
-                where(table.c.diaObjectId.in_(tuple(ids))).\
-                where(table.c.validityEnd == None).\
-                values(validityEnd=dt)
+            ids = ",".join(str(id) for id in ids)
+            query = 'UPDATE "' + table.name + '" '
+            query += "SET \"validityEnd\" = '" + str(dt) + "' "
+            query += 'WHERE "diaObjectId" IN (' + ids + ') '
+            query += 'AND "validityEnd" IS NULL'
 
-            # _LOG.debug("stmt: %s", stmt.compile(compile_kwargs={"literal_binds": True}))
+            #_LOG.debug("query: %s", query)
 
             if explain:
                 # run the same query with explain
-                self._explain(stmt, conn)
+                self._explain(query, conn)
 
-            with timer.Timer('DiaObject truncate'):
-                res = conn.execute(stmt)
+            with Timer('DiaObject truncate'):
+                res = conn.execute(sql.text(query))
             _LOG.debug("truncated %s intervals", res.rowcount)
 
             # insert new versions
@@ -637,16 +649,17 @@ class L1db(object):
             _LOG.debug("read table schema for %s: %s", name, table.c)
         return table
 
-    def _explain(self, stmt, conn):
+    def _explain(self, query, conn):
         # run the query with explain
-        global _explain
 
-        q = str(stmt.compile())
-        _LOG.info("explain for query: %s...", q[:64])
+        _LOG.info("explain for query: %s...", query[:64])
 
-        _explain = True
-        res = conn.execute(stmt)
-        _explain = False
+        if conn.engine.name == 'mysql':
+            query = "EXPLAIN EXTENDED " + query
+        else:
+            query = "EXPLAIN " + query
+
+        res = conn.execute(sql.text(query))
         if res.returns_rows:
             _LOG.info("explain: %s", res.keys())
             for row in res:
@@ -666,13 +679,35 @@ class L1db(object):
         @param explain:     If True then do EXPLAIN on INSERT query
         """
 
-        if explain:
-            # run the same query with explain
-            stmt = table.insert().values(objects[0]._asdict())
-            self._explain(stmt, conn)
+        def quoteValue(v):
+            if v is None:
+                v = "NULL"
+            elif isinstance(v, datetime):
+                v = "'" + str(v) + "'"
+            elif isinstance(v, basestring):
+                # we don't expect nasty stuff in strings
+                v = "'" + v + "'"
+            else:
+                # assume numeric stuff
+                v = str(v)
+            return v
 
-        stmt = table.insert().values([obj._asdict() for obj in objects])
-        # _LOG.debug("stmt: %s", stmt.compile(compile_kwargs={"literal_binds": True}))
-        with timer.Timer(table.name + ' insert'):
-            res = conn.execute(stmt)
+        fields = ['"' + f + '"' for f in object_type._fields]
+
+        query = 'INSERT INTO "' + table.name + '" (' + ','.join(fields) + ') VALUES '
+
+        values = []
+        for obj in objects:
+            row = [quoteValue(v) for v in obj]
+            values.append('(' + ','.join(row) + ')')
+
+        if explain:
+            # run the same query with explain, only give it one row of data
+            self._explain(query + values[0], conn)
+
+        query += ','.join(values)
+
+        # _LOG.debug("query: %s", query)
+        with Timer(table.name + ' insert'):
+            res = conn.execute(sql.text(query))
         _LOG.debug("inserted %s intervals", res.rowcount)
