@@ -10,6 +10,10 @@ from datetime import datetime
 import logging
 import math
 import sys
+try:
+    from ConfigParser import ConfigParser, NoSectionError
+except ImportError:
+    from configparser import ConfigParser, NoSectionError
 
 #-----------------------------
 # Imports for other modules --
@@ -128,6 +132,20 @@ class L1db(object):
         self._engine = engineFactory.getEngineFromFile(config)
         self._metadata = MetaData(self._engine)
         self._tables = {}
+
+        parser = ConfigParser()
+        parser.readfp(open(config), config)
+        try:
+            options = dict(parser.items("l1db"))
+        except NoSectionError:
+            options = {}
+        self._dia_object_index = options.get('dia_object_index', 'baseline')
+
+        if self._dia_object_index not in ('baseline', 'htm20_id_iov'):
+            raise ValueError('unexpected dia-object-index value: ' + str(self._dia_object_index))
+
+        _LOG.info("L1DB Configuration:")
+        _LOG.info("    dia_object_index: %s", self._dia_object_index)
 
     #-------------------
     #  Public methods --
@@ -317,6 +335,14 @@ class L1db(object):
         BLOB = sqlalchemy.types.LargeBinary
         CHAR = sqlalchemy.types.CHAR
 
+        if self._dia_object_index == 'htm20_id_iov':
+            constraints = [PrimaryKeyConstraint('htmId20', 'diaObjectId', 'validityStart',
+                                                name='PK_DiaObject'),
+                           Index('IDX_DiaObject_diaObjectId', 'diaObjectId')]
+        else:
+            constraints = [PrimaryKeyConstraint('diaObjectId', 'validityStart', name='PK_DiaObject'),
+                           Index('IDX_DiaObject_validityStart', 'validityStart'),
+                           Index('IDX_DiaObject_htmId20', 'htmId20')]
         diaObject = Table('DiaObject', self._metadata,
             Column('diaObjectId', BIGINT, nullable=False),
             Column('validityStart', DATETIME, nullable=False),
@@ -398,9 +424,7 @@ class L1db(object):
             Column('nearbyObj3LnP', FLOAT, nullable=True),
             Column('flags', BIGINT, nullable=False, default=0),
             Column('htmId20', BIGINT, nullable=False),
-            PrimaryKeyConstraint('diaObjectId', 'validityStart', name='PK_DiaObject'),
-            Index('IDX_DiaObject_validityStart', 'validityStart'),
-            Index('IDX_DiaObject_htmId20', 'htmId20'),
+            *constraints,
             mysql_engine=mysql_engine)
 
         diaSource = Table('DiaSource', self._metadata,
