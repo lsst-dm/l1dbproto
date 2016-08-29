@@ -31,6 +31,7 @@ from lsst.sphgeom import htmIndex, LonLat, UnitVector3d, Vector3d
 
 _LOG = logging.getLogger('ap_proto')
 
+
 def _configLogger(verbosity):
     """
     Configure logging based on verbosity level.
@@ -43,6 +44,7 @@ def _configLogger(verbosity):
 
 _dt_format = ('%Y-%m-%d %H:%M:%S', 'YYYY-MM-DD hh:mm:ss')
 
+
 def _timeParse(dt_str):
     """
     Convert string to datetime object.
@@ -50,11 +52,13 @@ def _timeParse(dt_str):
     dt = datetime.strptime(dt_str, _dt_format[0])
     return dt
 
+
 def _isDayTime(dt):
     """
     Returns true if time is not good for observing.
     """
     return 6 <= dt.hour < 20
+
 
 def _visitTimes(start_time, interval_sec, count):
     """
@@ -108,7 +112,6 @@ class APProto(object):
 
         # configure logging
         _configLogger(self.args.verbose)
-
 
     def run(self):
 
@@ -247,7 +250,6 @@ class APProto(object):
 
         return res
 
-
     def _makeDiaObjects(self, sources, indices, dt):
         """
         Over-simplified implementation of source-to-object matching and
@@ -300,9 +302,11 @@ class APProto(object):
 
         for obj in latest_objects:
             # only do it for 30 days after last detection
-            if obj.diaObjectId in ids: continue
+            if obj.diaObjectId in ids:
+                continue
             delta = dt - obj.lastNonForcedSource
-            if delta > timedelta(days=30): continue
+            if delta > timedelta(days=30):
+                continue
 
             # make new object with the same ID
             new_obj = l1db.DiaObject(diaObjectId=obj.diaObjectId, validityStart=dt, validityEnd=None,
@@ -342,7 +346,6 @@ class APProto(object):
             srcs += [src]
 
         return srcs
-
 
     def _makeDiaForcedSources(self, objects, visit_id):
         """

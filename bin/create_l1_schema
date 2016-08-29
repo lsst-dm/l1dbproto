@@ -22,6 +22,7 @@ from lsst.l1dbproto import l1db
 # Local definitions --
 #---------------------
 
+
 def _configLogger(verbosity):
     """ configure logging based on verbosity level """
 

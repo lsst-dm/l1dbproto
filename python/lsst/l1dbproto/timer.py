@@ -27,6 +27,7 @@ _LOG = logging.getLogger("timer")
 #  Class definition --
 #---------------------
 
+
 class Timer(object):
     """
     Instance of this class can be used to track consumed time.
@@ -122,5 +123,6 @@ class Timer(object):
         """
         if exc_type is None:
             self.stop()
-            if self._print: self.dump()
+            if self._print:
+                self.dump()
         return False

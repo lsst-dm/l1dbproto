@@ -17,6 +17,7 @@ import logging
 # Local non-exported definitions --
 #----------------------------------
 
+
 def _rotation_matrix(a, b):
     """
     Create rotation matrix to rotate vector a into b.
@@ -38,6 +39,7 @@ def _rotation_matrix(a, b):
 #------------------------
 # Exported definitions --
 #------------------------
+
 
 def rand_sphere_xyz(count=1, hemi=0, seed=None):
     """

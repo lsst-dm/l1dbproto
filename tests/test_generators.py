@@ -24,12 +24,13 @@ from lsst.l1dbproto import generators
 #  Unit test class definition --
 #-------------------------------
 
+
 class test_generators(unittest.TestCase):
 
-    def setUp(self) :
+    def setUp(self):
         pass
-    
-    def tearDown(self) :
+
+    def tearDown(self):
         pass
 
     def test_sphere_xyz(self):
@@ -54,7 +55,6 @@ class test_generators(unittest.TestCase):
         points = generators.rand_sphere_xyz(100, hemi=-1)
         self.assertLess(max(points[:, 2]), 0)
 
-
     def test_rot_matrix(self):
         """ Testing rotation matrix method """
 
@@ -74,7 +74,6 @@ class test_generators(unittest.TestCase):
         R = generators._rotation_matrix(a, b)
         expected = numpy.matrix("1,0,0;0,0,1;0,-1,0", dtype=float)
         self.assert_(numpy.array_equal(R, expected))
-
 
     def test_cone_xyz(self):
         """ Test for vector-in-cone generator """
