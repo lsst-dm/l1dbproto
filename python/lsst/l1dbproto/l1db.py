@@ -22,7 +22,7 @@ from . import constants, timer
 from lsst.db import engineFactory
 from lsst import sphgeom
 import sqlalchemy
-from sqlalchemy import (Column, engine, event, func, Index, MetaData, 
+from sqlalchemy import (Column, engine, event, func, Index, MetaData,
                         PrimaryKeyConstraint, sql, Table)
 
 #----------------------------------
@@ -87,6 +87,32 @@ DiaSource = namedtuple('DiaSource', """
     x xSigma y ySigma x_y_Cov snr
     flags htmId20
     """)
+DiaSource_full = namedtuple('DiaSource_full', """
+    diaSourceId ccdVisitId diaObjectId ssObjectId parentDiaSourceId
+    filterName prv_procOrder ssObjectReassocTime midPointTai
+    ra raSigma decl declSigma ra_decl_Cov
+    x xSigma y ySigma x_y_Cov snr
+    psFlux psFluxSigma psLnL psChi2 psN
+    trailFlux trailFluxSigma trailLength trailLengthSigma
+    trailAngle trailAngleSigma trailFlux_trailLength_Cov
+    trailFlux_trailAngle_Cov trailLength_trailAngle_Cov
+    trailLnL trailChi2 trailN
+    fpFlux fpFluxSigma diffFlux diffFluxSigma
+    fpSky fpSkySigma
+    E1 E1Sigma E2 E2Sigma E1_E2_Cov
+    mSum mSumSigma extendedness
+    apMeanSb01 apMeanSb01Sigma
+    apMeanSb02 apMeanSb02Sigma
+    apMeanSb03 apMeanSb03Sigma
+    apMeanSb04 apMeanSb04Sigma
+    apMeanSb05 apMeanSb05Sigma
+    apMeanSb06 apMeanSb06Sigma
+    apMeanSb07 apMeanSb07Sigma
+    apMeanSb08 apMeanSb08Sigma
+    apMeanSb09 apMeanSb09Sigma
+    apMeanSb10 apMeanSb10Sigma
+    flags htmId20
+    """)
 DiaForcedSource = namedtuple('DiaForcedSource', """
     diaObjectId  ccdVisitId
     psFlux psFlux_Sigma
@@ -111,6 +137,26 @@ def _htm_repr(index, level):
         index >>= 2
     res = {2: 'S', 3: 'N'}.get(index, 'X') + res
     return res
+
+def _htm_indices(xyz, FOV_rad):
+    """
+    Generate a set of HTM indices covering specified field of view.
+
+    Retuns sequence of ranges, range is a tuple (minHtmID, maxHtmID).
+
+    @param xyz: pointing direction
+    @param FOV_rad: field of view, radians
+    """
+
+    dir_v = sphgeom.UnitVector3d(xyz[0], xyz[1], xyz[2])
+    circle = sphgeom.Circle(dir_v, sphgeom.Angle(FOV_rad))
+    _LOG.debug('circle: %s', circle)
+    indices = sphgeom.htmIndex(circle, constants.HTM_LEVEL, constants.HTM_MAX_RANGES)
+    ranges = indices.ranges()
+    for range in ranges:
+        _LOG.debug('range: %s %s', _htm_repr(range[0], constants.HTM_LEVEL), _htm_repr(range[1], constants.HTM_LEVEL))
+
+    return ranges
 
 #---------------------
 #  Class definition --
@@ -140,12 +186,22 @@ class L1db(object):
         except NoSectionError:
             options = {}
         self._dia_object_index = options.get('dia_object_index', 'baseline')
+        self._months_sources = int(options.get('read_sources_months', 0))
+        self._months_fsources = int(options.get('read_forced_sources_months', 0))
+        self._read_full_objects = bool(options.get('read_full_objects', 0))
+        self._source_select = options.get('source_select', "by-fov")
 
         if self._dia_object_index not in ('baseline', 'htm20_id_iov'):
-            raise ValueError('unexpected dia-object-index value: ' + str(self._dia_object_index))
+            raise ValueError('unexpected dia_object_index value: ' + str(self._dia_object_index))
+        if self._source_select not in ('by-fov', 'by-oid'):
+            raise ValueError('unexpected source_select value: ' + self._source_select)
 
         _LOG.info("L1DB Configuration:")
         _LOG.info("    dia_object_index: %s", self._dia_object_index)
+        _LOG.info("    read_sources_months: %s", self._months_sources)
+        _LOG.info("    read_forced_sources_months: %s", self._months_fsources)
+        _LOG.info("    read_full_objects: %s", self._read_full_objects)
+        _LOG.info("    source_select: %s", self._source_select)
 
     #-------------------
     #  Public methods --
@@ -204,35 +260,29 @@ class L1db(object):
         return res
 
 
-    def getDiaObjects(self, xyz, FOV_rad, fullRecord=True, explain=False):
+    def getDiaObjects(self, xyz, FOV_rad, explain=False):
         """
         Returns the list of DiaObject instances around given direction.
         @param xyz: pointing direction
         @param FOV_rad: field of view, radians
-        @param fullRecord: if True read whole records from database
         """
 
         query = "SELECT "
 
         # decide what columns we need
         table = self._objects
-        if fullRecord:
+        if self._read_full_objects:
             query += "*"
         else:
             query += '"diaObjectId","lastNonForcedSource","ra","decl","raSigma","declSigma","ra_decl_Cov","htmId20"'
         query += ' FROM "' + table.name + '" WHERE ('
 
         # determine indices that we need
-        dir_v = sphgeom.UnitVector3d(xyz[0], xyz[1], xyz[2])
-        circle = sphgeom.Circle(dir_v, sphgeom.Angle(FOV_rad))
-        _LOG.debug('circle: %s', circle)
-        indices = sphgeom.htmIndex(circle, constants.HTM_LEVEL, constants.HTM_MAX_RANGES)
-        for range in indices.ranges():
-            _LOG.debug('range: %s %s', _htm_repr(range[0], constants.HTM_LEVEL), _htm_repr(range[1], constants.HTM_LEVEL))
+        ranges = _htm_indices(xyz, FOV_rad)
 
         # build selection
         exprlist = []
-        for low, up in indices.ranges():
+        for low, up in ranges:
             up -= 1
             if low == up:
                 exprlist.append('"htmId20" = ' + str(low))
@@ -252,10 +302,80 @@ class L1db(object):
         # execute select
         with Timer('DiaObject select'):
             res = self._engine.execute(sql.text(query))
-        obj_type = DiaObject if fullRecord else DiaObject_short
+        obj_type = DiaObject if self._read_full_objects else DiaObject_short
         objects = [_row2nt(row, obj_type) for row in res]
         _LOG.debug("found %s DiaObjects", len(objects))
         return objects
+
+
+    def getDiaSources(self, xyz, FOV_rad, objects, explain=False):
+        """
+        Returns the list of DiaSource instances around given direction or
+        matching given DiaObjects.
+
+        @param xyz: pointing direction
+        @param FOV_rad: field of view, radians
+        @param objects: list of DiaObject instances
+        """
+
+        if self._months_sources == 0:
+            _LOG.info("Skip DiaSources fetching")
+
+        table = self._sources
+        query = 'SELECT *  FROM "' + table.name + '" WHERE '
+
+        if self._source_select == 'by-fov':
+            # determine indices that we need
+            ranges = _htm_indices(xyz, FOV_rad)
+
+            # build selection
+            exprlist = []
+            for low, up in ranges:
+                up -= 1
+                if low == up:
+                    exprlist.append('"htmId20" = ' + str(low))
+                else:
+                    exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, up))
+            query += '(' + ' OR '.join(exprlist) + ')'
+        else:
+            # select by object id
+            ids = sorted([obj.diaObjectId for obj in objects])
+            ids = ",".join(str(id) for id in ids)
+            query += '"diaObjectId" IN (' + ids + ') '
+
+        # execute select
+        with Timer('DiaSource select'):
+            res = self._engine.execute(sql.text(query))
+        sources = [_row2nt(row, DiaSource_full) for row in res]
+        _LOG.debug("found %s DiaSources", len(sources))
+        return sources
+
+
+    def getDiaFSources(self, objects, explain=False):
+        """
+        Returns the list of DiaForceSource instances matching given DiaObjects.
+
+        @param objects: list of DiaObject instances
+        """
+
+        if self._months_fsources == 0:
+            _LOG.info("Skip DiaForceSources fetching")
+
+        table = self._forcedSources
+        query = 'SELECT *  FROM "' + table.name + '" WHERE '
+
+        # select by object id
+        ids = sorted([obj.diaObjectId for obj in objects])
+        ids = ",".join(str(id) for id in ids)
+        query += '"diaObjectId" IN (' + ids + ') '
+
+        # execute select
+        with Timer('DiaForcedSource select'):
+            res = self._engine.execute(sql.text(query))
+        sources = [_row2nt(row, DiaForcedSource) for row in res]
+        _LOG.debug("found %s DiaForcedSources", len(sources))
+        return sources
+
 
     def storeDiaObjects(self, objs, dt, explain=False):
         """
@@ -278,7 +398,7 @@ class L1db(object):
             query += 'WHERE "diaObjectId" IN (' + ids + ') '
             query += 'AND "validityEnd" IS NULL'
 
-            #_LOG.debug("query: %s", query)
+            # _LOG.debug("query: %s", query)
 
             if explain:
                 # run the same query with explain
