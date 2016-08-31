@@ -31,6 +31,7 @@ from lsst.sphgeom import htmIndex, LonLat, UnitVector3d, Vector3d
 
 _LOG = logging.getLogger('ap_proto')
 
+
 def _configLogger(verbosity):
     """
     Configure logging based on verbosity level.
@@ -43,6 +44,7 @@ def _configLogger(verbosity):
 
 _dt_format = ('%Y-%m-%d %H:%M:%S', 'YYYY-MM-DD hh:mm:ss')
 
+
 def _timeParse(dt_str):
     """
     Convert string to datetime object.
@@ -50,11 +52,13 @@ def _timeParse(dt_str):
     dt = datetime.strptime(dt_str, _dt_format[0])
     return dt
 
+
 def _isDayTime(dt):
     """
     Returns true if time is not good for observing.
     """
     return 6 <= dt.hour < 20
+
 
 def _visitTimes(start_time, interval_sec, count):
     """
@@ -92,6 +96,8 @@ class APProto(object):
                             help='Name of the database config file, def: l1db.cfg')
         parser.add_argument('-e', '--explain', default=False, action='store_true',
                             help='Run queries with EXPLAIN')
+        parser.add_argument('-U', '--no-update', default=False, action='store_true',
+                            help='DO not update database, only reading is performed.')
         parser.add_argument('--start-time', type=_timeParse, default=None,
                             help='Starting time, format: ' + _dt_format[1] +
                             '. Time is assumed to be in UTC time zone. Used only at'
@@ -106,7 +112,6 @@ class APProto(object):
 
         # configure logging
         _configLogger(self.args.verbose)
-
 
     def run(self):
 
@@ -173,12 +178,12 @@ class APProto(object):
                 for tbl in sorted(counts.keys()):
                     _LOG.info('%s row count: %s', tbl, counts[tbl])
 
-            with timer.Timer("L1-read"):
+            with timer.Timer("Objects-read"):
 
                 # Retrieve DiaObjects (latest versions) from database for matching,
                 # this will produce wider coverage so further filtering is needed
                 latest_objects = db.getDiaObjects(pointing_xyz, constants.FOV_rad,
-                                                  False, explain=self.args.explain)
+                                                  explain=self.args.explain)
                 _LOG.info('database found %s objects', len(latest_objects))
 
                 # filter database obects to a mask
@@ -199,19 +204,30 @@ class APProto(object):
                 # make forced sources for every object
                 fsrcs = self._makeDiaForcedSources(objects, visit_id)
 
-            with timer.Timer("L1-store"):
+            with timer.Timer("Source-read"):
 
-                # store new versions of objects
-                db.storeDiaObjects(objects, dt, explain=self.args.explain)
+                read_srcs = db.getDiaSources(pointing_xyz, constants.FOV_rad, latest_objects,
+                                             explain=self.args.explain)
+                _LOG.info('database found %s sources', len(read_srcs))
 
-                # store all sources
-                db.storeDiaSources(srcs, explain=self.args.explain)
+                read_srcs = db.getDiaFSources(latest_objects, explain=self.args.explain)
+                _LOG.info('database found %s forced sources', len(read_srcs))
 
-                # store all forced sources
-                db.storeDiaForcedSources(fsrcs, explain=self.args.explain)
+            if not self.args.no_update:
 
-            # store last visit info
-            db.saveVisit(visit_id, dt)
+                with timer.Timer("L1-store"):
+
+                    # store new versions of objects
+                    db.storeDiaObjects(objects, dt, explain=self.args.explain)
+
+                    # store all sources
+                    db.storeDiaSources(srcs, explain=self.args.explain)
+
+                    # store all forced sources
+                    db.storeDiaForcedSources(fsrcs, explain=self.args.explain)
+
+                # store last visit info
+                db.saveVisit(visit_id, dt)
 
             _LOG.info("--- Finished processing visit %s, time: %s", visit_id, loop_timer)
 
@@ -233,7 +249,6 @@ class APProto(object):
                 res.append(obj)
 
         return res
-
 
     def _makeDiaObjects(self, sources, indices, dt):
         """
@@ -287,9 +302,11 @@ class APProto(object):
 
         for obj in latest_objects:
             # only do it for 30 days after last detection
-            if obj.diaObjectId in ids: continue
+            if obj.diaObjectId in ids:
+                continue
             delta = dt - obj.lastNonForcedSource
-            if delta > timedelta(days=30): continue
+            if delta > timedelta(days=30):
+                continue
 
             # make new object with the same ID
             new_obj = l1db.DiaObject(diaObjectId=obj.diaObjectId, validityStart=dt, validityEnd=None,
@@ -329,7 +346,6 @@ class APProto(object):
             srcs += [src]
 
         return srcs
-
 
     def _makeDiaForcedSources(self, objects, visit_id):
         """

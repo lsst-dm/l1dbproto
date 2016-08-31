@@ -22,6 +22,7 @@ import sys
 # Local definitions --
 #---------------------
 
+
 def _configLogger(verbosity):
     """ configure logging based on verbosity level """
 
@@ -33,6 +34,7 @@ def _configLogger(verbosity):
 # dictionary with visit statistics
 _values = defaultdict(lambda: "NULL")
 
+
 def _new_visit(line):
     """
     Initialize data structures for new visit.
@@ -41,6 +43,7 @@ def _new_visit(line):
     words = line.split()
     visit = int(words[-4])
     _values['visit'] = visit
+
 
 def _parse_counts(line):
     """
@@ -54,6 +57,7 @@ def _parse_counts(line):
         _values['src_count'] = count
     elif "DiaForcedSource" in words:
         _values['fsrc_count'] = count
+
 
 def _parse_timers(line):
     """
@@ -84,6 +88,7 @@ def _parse_timers(line):
         _values['visit_real'] = real
         _values['visit_cpu'] = cpu
 
+
 def _parse_select_count(line):
     """
     Parse line with counter of selected rows
@@ -105,6 +110,7 @@ _cols = ['visit',
 
 # Flag to print CSV header line once
 _header = True
+
 
 def _end_visit(line):
     """
@@ -128,6 +134,7 @@ _dispatch = [("Start processing visit", _new_visit),
 #---------------------------------
 #  Application class definition --
 #---------------------------------
+
 
 def main():
 

@@ -25,6 +25,7 @@ from . import generators
 #  Class definition --
 #---------------------
 
+
 class DIA(object):
     """
     Class simulating difference image analysis.
