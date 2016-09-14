@@ -23,7 +23,7 @@ import sys
 # Imports for other modules --
 #-----------------------------
 from lsst.l1dbproto import constants, DIA, generators, l1db, timer
-from lsst.sphgeom import htmIndex, LonLat, UnitVector3d, Vector3d
+from lsst.sphgeom import HtmPixelization, LonLat, UnitVector3d, Vector3d
 
 #---------------------
 # Local definitions --
@@ -277,7 +277,8 @@ class APProto(object):
             ra = LonLat.longitudeOf(v3d).asDegrees()
             decl = LonLat.latitudeOf(v3d).asDegrees()
             dir_v = UnitVector3d(v3d)
-            index = htmIndex(dir_v, constants.HTM_LEVEL)
+            pixelator = HtmPixelization(constants.HTM_LEVEL)
+            index = pixelator.index(dir_v)
             obj = l1db.DiaObject(diaObjectId=var_idx, validityStart=dt, validityEnd=None,
                                  lastNonForcedSource=dt,
                                  ra=ra, decl=decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
@@ -334,7 +335,8 @@ class APProto(object):
             ra = LonLat.longitudeOf(v3d).asDegrees()
             decl = LonLat.latitudeOf(v3d).asDegrees()
             dir_v = UnitVector3d(v3d)
-            index = htmIndex(dir_v, constants.HTM_LEVEL)
+            pixelator = HtmPixelization(constants.HTM_LEVEL)
+            index = pixelator.index(dir_v)
 
             self.lastSourceId += 1
             src = l1db.DiaSource(diaSourceId=self.lastSourceId, ccdVisitId=visit_id,

@@ -128,20 +128,6 @@ def _row2nt(row, tupletype):
     """
     return tupletype(**dict(row))
 
-
-def _htm_repr(index, level):
-    """
-    Human-friendly representation of HTM index.
-    """
-    res = ''
-    while level >= 0:
-        res = ('0', '1', '2', '3')[index % 4] + res
-        level -= 1
-        index >>= 2
-    res = {2: 'S', 3: 'N'}.get(index, 'X') + res
-    return res
-
-
 def _htm_indices(xyz, FOV_rad):
     """
     Generate a set of HTM indices covering specified field of view.
@@ -155,13 +141,12 @@ def _htm_indices(xyz, FOV_rad):
     dir_v = sphgeom.UnitVector3d(xyz[0], xyz[1], xyz[2])
     circle = sphgeom.Circle(dir_v, sphgeom.Angle(FOV_rad))
     _LOG.debug('circle: %s', circle)
-    indices = sphgeom.htmIndex(circle, constants.HTM_LEVEL, constants.HTM_MAX_RANGES)
-    ranges = indices.ranges()
-    for range in ranges:
-        _LOG.debug('range: %s %s', _htm_repr(
-            range[0], constants.HTM_LEVEL), _htm_repr(range[1], constants.HTM_LEVEL))
+    pixelator = sphgeom.HtmPixelization(constants.HTM_LEVEL)
+    indices = pixelator.envelope(circle, constants.HTM_MAX_RANGES)
+    for range in indices.ranges():
+        _LOG.debug('range: %s %s', pixelator.toString(range[0]), pixelator.toString(range[1]))
 
-    return ranges
+    return indices.ranges()
 
 #---------------------
 #  Class definition --
