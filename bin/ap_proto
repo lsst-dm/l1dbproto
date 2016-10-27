@@ -282,9 +282,10 @@ class APProto(object):
             obj = l1db.DiaObject(diaObjectId=var_idx, validityStart=dt, validityEnd=None,
                                  lastNonForcedSource=dt,
                                  ra=ra, decl=decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
-                                 muRa=0., muRaSigma=0., muDecl=0., muDecSigma=0., muRa_muDeclCov=0.,
-                                 parallax=0., parallaxSigma=0., muRa_parallax_Cov=0., muDecl_parallax_Cov=0.,
-                                 lnL=0., chi2=0., N=0,
+                                 radecTai=0., pmRa=0., pmRaSigma=0., pmDecl=0., pmDeclSigma=0.,
+                                 pmRa_pmDecl_Cov=0., parallax=0., parallaxSigma=0.,
+                                 pmRa_parallax_Cov=0., pmDecl_parallax_Cov=0.,
+                                 pmParallaxLnL=0., pmParallaxChi2=0., pmParallaxNdata=0,
                                  flags=0, htmId20=index)
             objects += [obj]
         _LOG.info('found %s matching objects and %s transients/noise', len(objects) - n_trans, n_trans)
@@ -314,9 +315,10 @@ class APProto(object):
                                      lastNonForcedSource=obj.lastNonForcedSource,
                                      ra=float(obj.ra), decl=float(obj.decl),
                                      raSigma=0., declSigma=0., ra_decl_Cov=0.,
-                                     muRa=0., muRaSigma=0., muDecl=0., muDecSigma=0., muRa_muDeclCov=0.,
-                                     parallax=0., parallaxSigma=0., muRa_parallax_Cov=0., muDecl_parallax_Cov=0.,
-                                     lnL=0., chi2=0., N=0,
+                                     radecTai=0., pmRa=0., pmRaSigma=0., pmDecl=0., pmDeclSigma=0.,
+                                     pmRa_pmDecl_Cov=0., parallax=0., parallaxSigma=0.,
+                                     pmRa_parallax_Cov=0., pmDecl_parallax_Cov=0.,
+                                     pmParallaxLnL=0., pmParallaxChi2=0., pmParallaxNdata=0,
                                      flags=0, htmId20=obj.htmId20)
             objects.append(new_obj)
 
@@ -340,10 +342,11 @@ class APProto(object):
 
             self.lastSourceId += 1
             src = l1db.DiaSource(diaSourceId=self.lastSourceId, ccdVisitId=visit_id,
-                                 diaObjectId=var_idx, filterName='x',
+                                 diaObjectId=var_idx,
                                  prv_procOrder=0, midPointTai=0.,
                                  ra=ra, decl=decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
-                                 x=0., xSigma=0., y=0., ySigma=0., x_y_Cov=0., snr=5.,
+                                 x=0., xSigma=0., y=0., ySigma=0., x_y_Cov=0.,
+                                 apFlux=0., apFluxErr=0., snr=5.,
                                  flags=0, htmId20=index)
             srcs += [src]
 
