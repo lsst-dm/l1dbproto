@@ -1,0 +1,112 @@
+#!/bin/env python
+
+""" Application to read and parse schema from cat package.
+
+Reads and pasres schema and generates code that can be pasted into l1db.py.
+"""
+
+from __future__ import print_function
+
+#--------------------------------
+#  Imports of standard modules --
+#--------------------------------
+from argparse import ArgumentParser
+import sys
+
+#-----------------------------
+# Imports for other modules --
+#-----------------------------
+
+#---------------------
+# Local definitions --
+#---------------------
+
+# parsing states
+STATE_TOP = 0
+STATE_TABLE = 1
+STATE_TABLE_SKIP = 2
+
+# Tables that we need
+TABLES = ['DiaObject', 'SSObject', 'DiaSource', 'DiaForcedSource', 'DiaObject_To_Object_Match']
+
+#---------------------------------
+#  Application class definition --
+#---------------------------------
+
+
+def main():
+
+    descr = 'Read and parse schema in cat package.'
+    parser = ArgumentParser(description=descr)
+    parser.add_argument('file', help='Name of input file')
+    args = parser.parse_args()
+
+    state = STATE_TOP
+    table = None
+    columns = []
+    for line in open(args.file):
+        line = line.strip()
+
+        if line.startswith("--"):
+            # skip all comments
+            continue
+
+        if state == STATE_TOP:
+            # look for CREATE TABLE
+            if line.startswith("CREATE TABLE"):
+                table = line.split()[2]
+                if table in TABLES:
+                    columns = []
+                    state = STATE_TABLE
+                else:
+                    state = STATE_TABLE_SKIP
+        elif state == STATE_TABLE_SKIP:
+            # look for closing paren
+            if line.startswith(')'):
+                state = STATE_TOP
+        elif state == STATE_TABLE:
+            if line.startswith(')'):
+                state = STATE_TOP
+                dumpTable(table, columns)
+            elif line.startswith('('):
+                pass
+            elif line.startswith('PRIMARY') or line.startswith('INDEX'):
+                # don't care about index definition
+                pass
+            else:
+                # column definition
+                line = line.rstrip(',')
+                words = line.split()
+                column = words[0]
+                col_type = words[1]
+                nullable = "NOT NULL" not in line
+                try:
+                    idx = words.index('DEFAULT')
+                    default = words[idx + 1]
+                except ValueError:
+                    default = None
+                columns.append((column, col_type, nullable, default))
+
+def dumpTable(table, columns):
+
+    print("\ntable = Table('{}', self._metadata,".format(table))
+    for column, col_type, nullable, default in columns:
+        args = [repr(column), col_type, 'nullable=' + str(nullable)]
+        if default is not None:
+            args += ['default=' + default]
+        print("              Column({0}),".format(', '.join(args)))
+    print("              )")
+
+    # also dump full list of all non-nullable column names
+    print("-- all columns for table {0}".format(table))
+    print(' '.join(c[0] for c in columns))
+    print("-- non-nullable columns for table {0}".format(table))
+    print(' '.join(c[0] for c in columns if not c[2]))
+
+
+#
+#  run application when imported as a main module
+#
+if __name__ == "__main__":
+    rc = main()
+    sys.exit(rc)
