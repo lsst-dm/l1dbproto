@@ -18,6 +18,7 @@ import math
 import numpy
 import os
 import sys
+import time
 
 #-----------------------------
 # Imports for other modules --
@@ -28,6 +29,11 @@ from lsst.sphgeom import HtmPixelization, LonLat, UnitVector3d, Vector3d
 #---------------------
 # Local definitions --
 #---------------------
+
+COLOR_RED = '\033[1;31m'
+COLOR_GREEN = '\033[1;32m'
+COLOR_BLUE = '\033[1;34m'
+COLOR_RESET = '\033[0m'
 
 _LOG = logging.getLogger('ap_proto')
 
@@ -152,7 +158,7 @@ class APProto(object):
         visitTimes = _visitTimes(self.args.start_time, self.args.interval, self.args.num_visits)
         for visit_id, dt in enumerate(visitTimes, self.args.start_visit_id):
 
-            _LOG.info("+++ Start processing visit %s at %s", visit_id, dt)
+            _LOG.info(COLOR_GREEN + "+++ Start processing visit %s at %s" + COLOR_RESET, visit_id, dt)
             loop_timer = timer.Timer().start()
 
             with timer.Timer("DIA"):
@@ -177,6 +183,11 @@ class APProto(object):
                 counts = db.tableRowCount()
                 for tbl in sorted(counts.keys()):
                     _LOG.info('%s row count: %s', tbl, counts[tbl])
+
+            # numpy seems to do some multi-threaded stuff which "leaks" CPU cycles to the code below
+            # and it gets counted as resource usage in timers, add a short delay here so that threads
+            # finish and don't influence our timers below.
+            time.sleep(0.1)
 
             with timer.Timer("Objects-read"):
 
@@ -229,7 +240,7 @@ class APProto(object):
                 # store last visit info
                 db.saveVisit(visit_id, dt)
 
-            _LOG.info("--- Finished processing visit %s, time: %s", visit_id, loop_timer)
+            _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" + COLOR_RESET, visit_id, loop_timer)
 
     def _filterDiaObjects(self, latest_objects, pointing_xyz, FOV_rad):
         """
@@ -361,7 +372,7 @@ class APProto(object):
         for obj in objects:
 
             src = l1db.DiaForcedSource(diaObjectId=obj.diaObjectId, ccdVisitId=visit_id,
-                                       psFlux=0., psFlux_Sigma=0.,
+                                       psFlux=0., psFluxSigma=0.,
                                        x=0., y=0.,
                                        flags=0)
             fsrcs += [src]

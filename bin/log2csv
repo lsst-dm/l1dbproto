@@ -63,21 +63,33 @@ def _parse_timers(line):
     """
     Parse line with timer info.
     """
+    p = line.rfind('\x1b')
+    if p > 0:
+        line = line[:p]
     words = line.replace('=', ' ').split()
     real = float(words[-5])
     cpu = float(words[-3]) + float(words[-1])
     if " DiaObject select: " in line:
         _values['obj_select_real'] = real
         _values['obj_select_cpu'] = cpu
+        _values['select_real'] = _values.get('select_real', 0.) + real
     elif " DiaObject truncate: " in line:
         _values['obj_trunc_real'] = real
         _values['obj_trunc_cpu'] = cpu
     elif " DiaObject insert: " in line:
         _values['obj_insert_real'] = real
         _values['obj_insert_cpu'] = cpu
+    elif " DiaSource select: " in line:
+        _values['src_select_real'] = real
+        _values['src_select_cpu'] = cpu
+        _values['select_real'] = _values.get('select_real', 0.) + real
     elif " DiaSource insert: " in line:
         _values['src_insert_real'] = real
         _values['src_insert_cpu'] = cpu
+    elif " DiaForcedSource select: " in line:
+        _values['fsrc_select_real'] = real
+        _values['fsrc_select_cpu'] = cpu
+        _values['select_real'] = _values.get('select_real', 0.) + real
     elif " DiaForcedSource insert: " in line:
         _values['fsrc_insert_real'] = real
         _values['fsrc_insert_cpu'] = cpu
@@ -94,18 +106,30 @@ def _parse_select_count(line):
     Parse line with counter of selected rows
     """
     words = line.split()
-    count = int(words[-2])
     if "database found" in line:
-        _values['obj_selected'] = count
+        if "forced sources" in line:
+            _values['fsrc_selected'] = int(words[-3])
+        elif "sources" in line:
+            _values['src_selected'] = int(words[-2])
+        else:
+            _values['obj_selected'] = int(words[-2])
     elif "after filtering" in line:
-        _values['obj_in_fov'] = count
+        _values['obj_in_fov'] = int(words[-2])
 
 # List of columns (keys in _values dictionary)
 _cols = ['visit',
-         'obj_select_real', 'obj_select_cpu', 'obj_trunc_real', 'obj_trunc_cpu',
-         'obj_insert_real', 'obj_insert_cpu', 'src_insert_real', 'src_insert_cpu',
-         'fsrc_insert_real', 'fsrc_insert_cpu', 'store_real', 'store_cpu',
-         'visit_real', 'visit_cpu', 'obj_selected', 'obj_in_fov',
+         'obj_select_real', 'obj_select_cpu',
+         'obj_trunc_real', 'obj_trunc_cpu',
+         'obj_insert_real', 'obj_insert_cpu',
+         'src_select_real', 'src_select_cpu',
+         'src_insert_real', 'src_insert_cpu',
+         'fsrc_select_real', 'fsrc_select_cpu',
+         'fsrc_insert_real', 'fsrc_insert_cpu',
+         'select_real',
+         'store_real', 'store_cpu',
+         'visit_real', 'visit_cpu',
+         'obj_selected', 'src_selected', 'fsrc_selected',
+         'obj_in_fov',
          'obj_count', 'src_count', 'fsrc_count']
 
 # Flag to print CSV header line once
@@ -128,7 +152,7 @@ _dispatch = [("Start processing visit", _new_visit),
              (": real=", _parse_timers),
              ("ap_proto: database found ", _parse_select_count),
              ("ap_proto: after filtering ", _parse_select_count),
-             ("Finished processing visit", _end_visit),            # must be last
+             ("Finished processing visit", _end_visit),  # must be last
              ]
 
 #---------------------------------

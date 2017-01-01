@@ -34,7 +34,8 @@ _LOG = logging.getLogger(__name__)
 
 class Timer(object):
 
-    def __init__(self, name):
+    def __init__(self, name, log_before_cursor_execute=False):
+        self._log_before_cursor_execute = log_before_cursor_execute
         self._timer1 = timer.Timer(name)
         self._timer2 = timer.Timer(name + " (before/after cursor)")
 
@@ -59,6 +60,8 @@ class Timer(object):
         return False
 
     def _start_timer(self, conn, cursor, statement, parameters, context, executemany):
+        if self._log_before_cursor_execute:
+            _LOG.info("before_cursor_execute")
         self._timer2.start()
 
     def _stop_timer(self, conn, cursor, statement, parameters, context, executemany):
@@ -240,7 +243,7 @@ class L1db(object):
         for table in tables:
             stmt = sql.select([func.count()]).select_from(table)
             count = self._engine.scalar(stmt)
-            res[table] = count
+            res[table.name] = count
 
         return res
 
@@ -303,6 +306,11 @@ class L1db(object):
 
         if self._months_sources == 0:
             _LOG.info("Skip DiaSources fetching")
+            return []
+
+        if not objects:
+            _LOG.info("Skip DiaSources fetching - no Objects")
+            return []
 
         table = self._sources
         query = 'SELECT *  FROM "' + table.name + '" WHERE '
@@ -342,6 +350,11 @@ class L1db(object):
 
         if self._months_fsources == 0:
             _LOG.info("Skip DiaForceSources fetching")
+            return []
+
+        if not objects:
+            _LOG.info("Skip DiaSources fetching - no Objects")
+            return []
 
         table = self._forcedSources
         query = 'SELECT *  FROM "' + table.name + '" WHERE '
@@ -651,7 +664,6 @@ class L1db(object):
                           Index('IDX_DiaSource_ccdVisitId', 'ccdVisitId'),
                           Index('IDX_DiaSource_diaObjectId', 'diaObjectId'),
                           Index('IDX_DiaSource_ssObjectId', 'ssObjectId'),
-                          Index('IDX_DiaSource_filterName', 'filterName'),
                           Index('IDX_DiaSource_htmId20', 'htmId20'),
                           mysql_engine=mysql_engine)
 
@@ -853,7 +865,7 @@ class L1db(object):
                 v = "NULL"
             elif isinstance(v, datetime):
                 v = "'" + str(v) + "'"
-            elif isinstance(v, basestring):
+            elif isinstance(v, str):
                 # we don't expect nasty stuff in strings
                 v = "'" + v + "'"
             else:
@@ -877,6 +889,7 @@ class L1db(object):
         query += ','.join(values)
 
         # _LOG.debug("query: %s", query)
-        with Timer(table.name + ' insert'):
+        _LOG.info("%s: will store %d recors", table.name, len(objects))
+        with Timer(table.name + ' insert', True):
             res = conn.execute(sql.text(query))
         _LOG.debug("inserted %s intervals", res.rowcount)
