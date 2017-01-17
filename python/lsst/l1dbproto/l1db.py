@@ -98,18 +98,23 @@ DiaSource_full = namedtuple('DiaSource_full', """
     ra raSigma decl declSigma ra_decl_Cov
     x xSigma y ySigma x_y_Cov
     apFlux apFluxErr snr
-    psFlux psFluxSigma psLnL psChi2 psNdata
-    trailFlux trailFluxSigma trailLength trailLengthSigma
-    trailAngle trailAngleSigma trailFlux_trailLength_Cov
-    trailFlux_trailAngle_Cov trailLength_trailAngle_Cov
-    trailLnL trailChi2 trailNdata
-    dipMeanFlux dipMeanFluxSigma dipFluxDiff dipFluxDiffSigma
-    dipRa dipRaSigma dipDecl dipDeclSigma dipLength dipLengthSigma
-    dipAngle dipAngleSigma
-    dipLnL dipChi2 dipNdata
-    totFlux totFluxErr
-    diffFlux diffFluxErr
-    fpBkgd fpBkgdErr
+    psFlux psFluxSigma psRa psRaSigma psDecl psDeclSigma
+    psFlux_psRa_Cov psFlux_psDecl_Cov psRa_psDecl_Cov psLnL psChi2 psNdata
+    trailFlux trailFluxSigma trailRa trailRaSigma trailDecl trailDeclSigma
+    trailLength trailLengthSigma trailAngle trailAngleSigma
+    trailFlux_trailRa_Cov trailFlux_trailDecl_Cov trailFlux_trailLength_Cov
+    trailFlux_trailAngle_Cov trailRa_trailDecl_Cov trailRa_trailLength_Cov
+    trailRa_trailAngle_Cov trailDecl_trailLength_Cov trailDecl_trailAngle_Cov
+    trailLength_trailAngle_Cov trailLnL trailChi2 trailNdata
+    dipMeanFlux dipMeanFluxSigma dipFluxDiff dipFluxDiffSigma dipRa dipRaSigma
+    dipDecl dipDeclSigma dipLength dipLengthSigma dipAngle dipAngleSigma
+    dipMeanFlux_dipFluxDiff_Cov dipMeanFlux_dipRa_Cov dipMeanFlux_dipDecl_Cov
+    dipMeanFlux_dipLength_Cov dipMeanFlux_dipAngle_Cov dipFluxDiff_dipRa_Cov
+    dipFluxDiff_dipDecl_Cov dipFluxDiff_dipLength_Cov dipFluxDiff_dipAngle_Cov
+    dipRa_dipDecl_Cov dipRa_dipLength_Cov dipRa_dipAngle_Cov dipDecl_dipLength_Cov
+    dipDecl_dipAngle_Cov dipLength_dipAngle_Cov dipLnL dipChi2 dipNdata
+    totFlux totFluxErr diffFlux diffFluxErr fpBkgd fpBkgdErr
+    ixx ixxSigma iyy iyySigma ixy ixySigma ixx_iyy_Cov ixx_ixy_Cov iyy_ixy_Cov ixxPSF iyyPSF ixyPSF
     extendedness spuriousness
     flags htmId20
     """)
@@ -181,7 +186,7 @@ class L1db(object):
         self._read_full_objects = bool(options.get('read_full_objects', 0))
         self._source_select = options.get('source_select', "by-fov")
 
-        if self._dia_object_index not in ('baseline', 'htm20_id_iov'):
+        if self._dia_object_index not in ('baseline', 'htm20_id_iov', 'last_object_table'):
             raise ValueError('unexpected dia_object_index value: ' + str(self._dia_object_index))
         if self._source_select not in ('by-fov', 'by-oid'):
             raise ValueError('unexpected source_select value: ' + self._source_select)
@@ -240,6 +245,8 @@ class L1db(object):
         """
         res = {}
         tables = [self._objects, self._sources, self._forcedSources]
+        if self._dia_object_index == 'last_object_table':
+            tables.append(self._objects_last)
         for table in tables:
             stmt = sql.select([func.count()]).select_from(table)
             count = self._engine.scalar(stmt)
@@ -257,7 +264,10 @@ class L1db(object):
         query = "SELECT "
 
         # decide what columns we need
-        table = self._objects
+        if self._dia_object_index == 'last_object_table':
+            table = self._objects_last
+        else:
+            table = self._objects
         if self._read_full_objects:
             query += "*"
         else:
@@ -276,9 +286,11 @@ class L1db(object):
             else:
                 exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, up))
         query += ' OR '.join(exprlist)
+        query += ')'
 
         # select latest version of objects
-        query += ') AND "validityEnd" IS NULL'
+        if self._dia_object_index != 'last_object_table':
+            query += ' AND "validityEnd" IS NULL'
 
         _LOG.debug("query: %s", query)
 
@@ -379,28 +391,53 @@ class L1db(object):
         """
 
         ids = sorted([obj.diaObjectId for obj in objs])
-
-        table = self._objects
+        _LOG.info("first object ID: %d", ids[0])
 
         # everything to be done in single transaction
         with self._engine.begin() as conn:
 
-            # truncate existing validity intervals
             ids = ",".join(str(id) for id in ids)
-            query = 'UPDATE "' + table.name + '" '
-            query += "SET \"validityEnd\" = '" + str(dt) + "' "
-            query += 'WHERE "diaObjectId" IN (' + ids + ') '
-            query += 'AND "validityEnd" IS NULL'
 
-            # _LOG.debug("query: %s", query)
+            if self._dia_object_index == 'last_object_table':
 
-            if explain:
-                # run the same query with explain
-                self._explain(query, conn)
+                # insert and replace all records in LAST table, mysql has a non-standard
+                # REPLACE stmt which can do this effiviently but Postgres has no similar
+                # feature so we are doing it hard way - deleting existing records first
 
-            with Timer('DiaObject truncate'):
-                res = conn.execute(sql.text(query))
-            _LOG.debug("truncated %s intervals", res.rowcount)
+                table = self._objects_last
+
+                query = 'DELETE FROM "' + table.name + '" '
+                query += 'WHERE "diaObjectId" IN (' + ids + ') '
+
+                if explain:
+                    # run the same query with explain
+                    self._explain(query, conn)
+
+                with Timer(table.name + ' delete'):
+                    res = conn.execute(sql.text(query))
+                _LOG.debug("deleted %s objects", res.rowcount)
+
+                # and insert
+                self._storeObjects(DiaObject, objs, conn, table, explain)
+
+            else:
+
+                # truncate existing validity intervals
+                table = self._objects
+                query = 'UPDATE "' + table.name + '" '
+                query += "SET \"validityEnd\" = '" + str(dt) + "' "
+                query += 'WHERE "diaObjectId" IN (' + ids + ') '
+                query += 'AND "validityEnd" IS NULL'
+
+                # _LOG.debug("query: %s", query)
+
+                if explain:
+                    # run the same query with explain
+                    self._explain(query, conn)
+
+                with Timer(table.name + ' truncate'):
+                    res = conn.execute(sql.text(query))
+                _LOG.debug("truncated %s intervals", res.rowcount)
 
             # insert new versions
             table = self._objects
@@ -455,104 +492,18 @@ class L1db(object):
                            Index('IDX_DiaObject_validityStart', 'validityStart'),
                            Index('IDX_DiaObject_htmId20', 'htmId20')]
         diaObject = Table('DiaObject', self._metadata,
-                          Column('diaObjectId', BIGINT, nullable=False),
-                          Column('validityStart', DATETIME, nullable=False),
-                          Column('validityEnd', DATETIME, nullable=True),
-                          Column('lastNonForcedSource', DATETIME, nullable=False),
-                          Column('ra', DOUBLE, nullable=False),
-                          Column('raSigma', FLOAT, nullable=False),
-                          Column('decl', DOUBLE, nullable=False),
-                          Column('declSigma', FLOAT, nullable=False),
-                          Column('ra_decl_Cov', FLOAT, nullable=False),
-                          Column('radecTai', DOUBLE, nullable=False),
-                          Column('pmRa', FLOAT, nullable=False),
-                          Column('pmRaSigma', FLOAT, nullable=False),
-                          Column('pmDecl', FLOAT, nullable=False),
-                          Column('pmDeclSigma', FLOAT, nullable=False),
-                          Column('parallax', FLOAT, nullable=False),
-                          Column('parallaxSigma', FLOAT, nullable=False),
-                          Column('pmRa_pmDecl_Cov', FLOAT, nullable=False),
-                          Column('pmRa_parallax_Cov', FLOAT, nullable=False),
-                          Column('pmDecl_parallax_Cov', FLOAT, nullable=False),
-                          Column('pmParallaxLnL', FLOAT, nullable=False),
-                          Column('pmParallaxChi2', FLOAT, nullable=False),
-                          Column('pmParallaxNdata', INT, nullable=False),
-                          Column('uPSFluxMean', FLOAT, nullable=True),
-                          Column('uPSFluxMeanErr', FLOAT, nullable=True),
-                          Column('uPSFluxSigma', FLOAT, nullable=True),
-                          Column('uPSFluxChi2', FLOAT, nullable=True),
-                          Column('uPSFluxNdata', INT, nullable=True),
-                          Column('uFPFluxMean', FLOAT, nullable=True),
-                          Column('uFPFluxMeanErr', FLOAT, nullable=True),
-                          Column('uFPFluxSigma', FLOAT, nullable=True),
-                          Column('gPSFluxMean', FLOAT, nullable=True),
-                          Column('gPSFluxMeanErr', FLOAT, nullable=True),
-                          Column('gPSFluxSigma', FLOAT, nullable=True),
-                          Column('gPSFluxChi2', FLOAT, nullable=True),
-                          Column('gPSFluxNdata', INT, nullable=True),
-                          Column('gFPFluxMean', FLOAT, nullable=True),
-                          Column('gFPFluxMeanErr', FLOAT, nullable=True),
-                          Column('gFPFluxSigma', FLOAT, nullable=True),
-                          Column('rPSFluxMean', FLOAT, nullable=True),
-                          Column('rPSFluxMeanErr', FLOAT, nullable=True),
-                          Column('rPSFluxSigma', FLOAT, nullable=True),
-                          Column('rPSFluxChi2', FLOAT, nullable=True),
-                          Column('rPSFluxNdata', INT, nullable=True),
-                          Column('rFPFluxMean', FLOAT, nullable=True),
-                          Column('rFPFluxMeanErr', FLOAT, nullable=True),
-                          Column('rFPFluxSigma', FLOAT, nullable=True),
-                          Column('iPSFluxMean', FLOAT, nullable=True),
-                          Column('iPSFluxMeanErr', FLOAT, nullable=True),
-                          Column('iPSFluxSigma', FLOAT, nullable=True),
-                          Column('iPSFluxChi2', FLOAT, nullable=True),
-                          Column('iPSFluxNdata', INT, nullable=True),
-                          Column('iFPFluxMean', FLOAT, nullable=True),
-                          Column('iFPFluxMeanErr', FLOAT, nullable=True),
-                          Column('iFPFluxSigma', FLOAT, nullable=True),
-                          Column('zPSFluxMean', FLOAT, nullable=True),
-                          Column('zPSFluxMeanErr', FLOAT, nullable=True),
-                          Column('zPSFluxSigma', FLOAT, nullable=True),
-                          Column('zPSFluxChi2', FLOAT, nullable=True),
-                          Column('zPSFluxNdata', INT, nullable=True),
-                          Column('zFPFluxMean', FLOAT, nullable=True),
-                          Column('zFPFluxMeanErr', FLOAT, nullable=True),
-                          Column('zFPFluxSigma', FLOAT, nullable=True),
-                          Column('yPSFluxMean', FLOAT, nullable=True),
-                          Column('yPSFluxMeanErr', FLOAT, nullable=True),
-                          Column('yPSFluxSigma', FLOAT, nullable=True),
-                          Column('yPSFluxChi2', FLOAT, nullable=True),
-                          Column('yPSFluxNdata', INT, nullable=True),
-                          Column('yFPFluxMean', FLOAT, nullable=True),
-                          Column('yFPFluxMeanErr', FLOAT, nullable=True),
-                          Column('yFPFluxSigma', FLOAT, nullable=True),
-                          Column('uLcPeriodic', BLOB, nullable=True),
-                          Column('gLcPeriodic', BLOB, nullable=True),
-                          Column('rLcPeriodic', BLOB, nullable=True),
-                          Column('iLcPeriodic', BLOB, nullable=True),
-                          Column('zLcPeriodic', BLOB, nullable=True),
-                          Column('yLcPeriodic', BLOB, nullable=True),
-                          Column('uLcNonPeriodic', BLOB, nullable=True),
-                          Column('gLcNonPeriodic', BLOB, nullable=True),
-                          Column('rLcNonPeriodic', BLOB, nullable=True),
-                          Column('iLcNonPeriodic', BLOB, nullable=True),
-                          Column('zLcNonPeriodic', BLOB, nullable=True),
-                          Column('yLcNonPeriodic', BLOB, nullable=True),
-                          Column('nearbyObj1', BIGINT, nullable=True),
-                          Column('nearbyObj1Dist', FLOAT, nullable=True),
-                          Column('nearbyObj1LnP', FLOAT, nullable=True),
-                          Column('nearbyObj2', BIGINT, nullable=True),
-                          Column('nearbyObj2Dist', FLOAT, nullable=True),
-                          Column('nearbyObj2LnP', FLOAT, nullable=True),
-                          Column('nearbyObj3', BIGINT, nullable=True),
-                          Column('nearbyObj3Dist', FLOAT, nullable=True),
-                          Column('nearbyObj3LnP', FLOAT, nullable=True),
-                          Column('flags', BIGINT, nullable=False, default=0),
-                          Column('htmId20', BIGINT, nullable=False),
-                          *constraints,
+                          *(self._object_columns() + constraints),
                           mysql_engine=mysql_engine)
 
+        if self._dia_object_index == 'last_object_table':
+            constraints = [PrimaryKeyConstraint('htmId20', 'diaObjectId', name='PK_DiaObjectLast'),
+                           Index('IDX_DiaObjectLast_diaObjectId', 'diaObjectId')]
+            diaObject = Table('DiaObjectLast', self._metadata,
+                              *(self._object_columns() + constraints),
+                              mysql_engine=mysql_engine)
+
         diaSource = Table('DiaSource', self._metadata,
-                          Column('diaSourceId', BIGINT, nullable=False),
+                          Column('diaSourceId', BIGINT, nullable=False, autoincrement=False),
                           Column('ccdVisitId', BIGINT, nullable=False),
                           Column('diaObjectId', BIGINT, nullable=True),
                           Column('ssObjectId', BIGINT, nullable=True),
@@ -668,7 +619,7 @@ class L1db(object):
                           mysql_engine=mysql_engine)
 
         ssObject = Table('SSObject', self._metadata,
-                         Column('ssObjectId', BIGINT, nullable=False),
+                         Column('ssObjectId', BIGINT, nullable=False, autoincrement=False),
                          Column('q', DOUBLE, nullable=True),
                          Column('qSigma', DOUBLE, nullable=True),
                          Column('e', DOUBLE, nullable=True),
@@ -753,8 +704,8 @@ class L1db(object):
                          mysql_engine=mysql_engine)
 
         diaForcedSource = Table('DiaForcedSource', self._metadata,
-                                Column('diaObjectId', BIGINT, nullable=False),
-                                Column('ccdVisitId', BIGINT, nullable=False),
+                                Column('diaObjectId', BIGINT, nullable=False, autoincrement=False),
+                                Column('ccdVisitId', BIGINT, nullable=False, autoincrement=False),
                                 Column('psFlux', FLOAT, nullable=False),
                                 Column('psFluxSigma', FLOAT, nullable=True),
                                 Column('x', FLOAT, nullable=False),
@@ -765,7 +716,7 @@ class L1db(object):
                                 mysql_engine=mysql_engine)
 
         o2oMatch = Table('DiaObject_To_Object_Match', self._metadata,
-                         Column('diaObjectId', BIGINT, nullable=False),
+                         Column('diaObjectId', BIGINT, nullable=False, autoincrement=False),
                          Column('objectId', BIGINT, nullable=False),
                          Column('dist', FLOAT, nullable=False),
                          Column('lnP', FLOAT, nullable=True),
@@ -787,6 +738,111 @@ class L1db(object):
             self._metadata.drop_all()
         _LOG.info('creating all tables')
         self._metadata.create_all()
+
+    def _object_columns(self):
+
+        DOUBLE = self._make_doube_type()
+        FLOAT = sqlalchemy.types.Float
+        DATETIME = sqlalchemy.types.TIMESTAMP
+        BIGINT = sqlalchemy.types.BigInteger
+        INTEGER = INT = sqlalchemy.types.Integer
+        BLOB = sqlalchemy.types.LargeBinary
+        CHAR = sqlalchemy.types.CHAR
+
+        object_columns = [Column('diaObjectId', BIGINT, nullable=False, autoincrement=False),
+                          Column('validityStart', DATETIME, nullable=False),
+                          Column('validityEnd', DATETIME, nullable=True),
+                          Column('lastNonForcedSource', DATETIME, nullable=False),
+                          Column('ra', DOUBLE, nullable=False),
+                          Column('raSigma', FLOAT, nullable=False),
+                          Column('decl', DOUBLE, nullable=False),
+                          Column('declSigma', FLOAT, nullable=False),
+                          Column('ra_decl_Cov', FLOAT, nullable=False),
+                          Column('radecTai', DOUBLE, nullable=False),
+                          Column('pmRa', FLOAT, nullable=False),
+                          Column('pmRaSigma', FLOAT, nullable=False),
+                          Column('pmDecl', FLOAT, nullable=False),
+                          Column('pmDeclSigma', FLOAT, nullable=False),
+                          Column('parallax', FLOAT, nullable=False),
+                          Column('parallaxSigma', FLOAT, nullable=False),
+                          Column('pmRa_pmDecl_Cov', FLOAT, nullable=False),
+                          Column('pmRa_parallax_Cov', FLOAT, nullable=False),
+                          Column('pmDecl_parallax_Cov', FLOAT, nullable=False),
+                          Column('pmParallaxLnL', FLOAT, nullable=False),
+                          Column('pmParallaxChi2', FLOAT, nullable=False),
+                          Column('pmParallaxNdata', INT, nullable=False),
+                          Column('uPSFluxMean', FLOAT, nullable=True),
+                          Column('uPSFluxMeanErr', FLOAT, nullable=True),
+                          Column('uPSFluxSigma', FLOAT, nullable=True),
+                          Column('uPSFluxChi2', FLOAT, nullable=True),
+                          Column('uPSFluxNdata', INT, nullable=True),
+                          Column('uFPFluxMean', FLOAT, nullable=True),
+                          Column('uFPFluxMeanErr', FLOAT, nullable=True),
+                          Column('uFPFluxSigma', FLOAT, nullable=True),
+                          Column('gPSFluxMean', FLOAT, nullable=True),
+                          Column('gPSFluxMeanErr', FLOAT, nullable=True),
+                          Column('gPSFluxSigma', FLOAT, nullable=True),
+                          Column('gPSFluxChi2', FLOAT, nullable=True),
+                          Column('gPSFluxNdata', INT, nullable=True),
+                          Column('gFPFluxMean', FLOAT, nullable=True),
+                          Column('gFPFluxMeanErr', FLOAT, nullable=True),
+                          Column('gFPFluxSigma', FLOAT, nullable=True),
+                          Column('rPSFluxMean', FLOAT, nullable=True),
+                          Column('rPSFluxMeanErr', FLOAT, nullable=True),
+                          Column('rPSFluxSigma', FLOAT, nullable=True),
+                          Column('rPSFluxChi2', FLOAT, nullable=True),
+                          Column('rPSFluxNdata', INT, nullable=True),
+                          Column('rFPFluxMean', FLOAT, nullable=True),
+                          Column('rFPFluxMeanErr', FLOAT, nullable=True),
+                          Column('rFPFluxSigma', FLOAT, nullable=True),
+                          Column('iPSFluxMean', FLOAT, nullable=True),
+                          Column('iPSFluxMeanErr', FLOAT, nullable=True),
+                          Column('iPSFluxSigma', FLOAT, nullable=True),
+                          Column('iPSFluxChi2', FLOAT, nullable=True),
+                          Column('iPSFluxNdata', INT, nullable=True),
+                          Column('iFPFluxMean', FLOAT, nullable=True),
+                          Column('iFPFluxMeanErr', FLOAT, nullable=True),
+                          Column('iFPFluxSigma', FLOAT, nullable=True),
+                          Column('zPSFluxMean', FLOAT, nullable=True),
+                          Column('zPSFluxMeanErr', FLOAT, nullable=True),
+                          Column('zPSFluxSigma', FLOAT, nullable=True),
+                          Column('zPSFluxChi2', FLOAT, nullable=True),
+                          Column('zPSFluxNdata', INT, nullable=True),
+                          Column('zFPFluxMean', FLOAT, nullable=True),
+                          Column('zFPFluxMeanErr', FLOAT, nullable=True),
+                          Column('zFPFluxSigma', FLOAT, nullable=True),
+                          Column('yPSFluxMean', FLOAT, nullable=True),
+                          Column('yPSFluxMeanErr', FLOAT, nullable=True),
+                          Column('yPSFluxSigma', FLOAT, nullable=True),
+                          Column('yPSFluxChi2', FLOAT, nullable=True),
+                          Column('yPSFluxNdata', INT, nullable=True),
+                          Column('yFPFluxMean', FLOAT, nullable=True),
+                          Column('yFPFluxMeanErr', FLOAT, nullable=True),
+                          Column('yFPFluxSigma', FLOAT, nullable=True),
+                          Column('uLcPeriodic', BLOB, nullable=True),
+                          Column('gLcPeriodic', BLOB, nullable=True),
+                          Column('rLcPeriodic', BLOB, nullable=True),
+                          Column('iLcPeriodic', BLOB, nullable=True),
+                          Column('zLcPeriodic', BLOB, nullable=True),
+                          Column('yLcPeriodic', BLOB, nullable=True),
+                          Column('uLcNonPeriodic', BLOB, nullable=True),
+                          Column('gLcNonPeriodic', BLOB, nullable=True),
+                          Column('rLcNonPeriodic', BLOB, nullable=True),
+                          Column('iLcNonPeriodic', BLOB, nullable=True),
+                          Column('zLcNonPeriodic', BLOB, nullable=True),
+                          Column('yLcNonPeriodic', BLOB, nullable=True),
+                          Column('nearbyObj1', BIGINT, nullable=True),
+                          Column('nearbyObj1Dist', FLOAT, nullable=True),
+                          Column('nearbyObj1LnP', FLOAT, nullable=True),
+                          Column('nearbyObj2', BIGINT, nullable=True),
+                          Column('nearbyObj2Dist', FLOAT, nullable=True),
+                          Column('nearbyObj2LnP', FLOAT, nullable=True),
+                          Column('nearbyObj3', BIGINT, nullable=True),
+                          Column('nearbyObj3Dist', FLOAT, nullable=True),
+                          Column('nearbyObj3LnP', FLOAT, nullable=True),
+                          Column('flags', BIGINT, nullable=False, default=0),
+                          Column('htmId20', BIGINT, nullable=False)]
+        return object_columns
 
     def _make_doube_type(self):
         """
@@ -810,6 +866,11 @@ class L1db(object):
     def _objects(self):
         """ Lazy reading of table schema """
         return self._table_schema('DiaObject')
+
+    @property
+    def _objects_last(self):
+        """ Lazy reading of table schema """
+        return self._table_schema('DiaObjectLast')
 
     @property
     def _sources(self):
@@ -848,7 +909,7 @@ class L1db(object):
         else:
             _LOG.info("EXPLAIN returned nothing")
 
-    def _storeObjects(self, object_type, objects, conn, table, explain=False):
+    def _storeObjects(self, object_type, objects, conn, table, explain=False, replace=False):
         """
         Generic store method.
 
@@ -890,6 +951,6 @@ class L1db(object):
 
         # _LOG.debug("query: %s", query)
         _LOG.info("%s: will store %d recors", table.name, len(objects))
-        with Timer(table.name + ' insert', True):
+        with Timer(table.name + ' insert'):
             res = conn.execute(sql.text(query))
         _LOG.debug("inserted %s intervals", res.rowcount)
