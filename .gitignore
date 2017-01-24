@@ -3,5 +3,7 @@
 config.log
 *.pyc
 *.cfgc
+*.gz
+*.cfg
 tests/.tests
 python/lsst/l1dbproto/version.py

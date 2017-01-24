@@ -76,9 +76,15 @@ def _parse_timers(line):
     elif " DiaObject truncate: " in line:
         _values['obj_trunc_real'] = real
         _values['obj_trunc_cpu'] = cpu
+    elif " DiaObjectLast delete: " in line:
+        _values['obj_last_delete_real'] = real
+        _values['obj_last_delete_cpu'] = cpu
     elif " DiaObject insert: " in line:
         _values['obj_insert_real'] = real
         _values['obj_insert_cpu'] = cpu
+    elif " DiaObjectLast insert: " in line:
+        _values['obj_last_insert_real'] = real
+        _values['obj_last_insert_cpu'] = cpu
     elif " DiaSource select: " in line:
         _values['src_select_real'] = real
         _values['src_select_cpu'] = cpu
@@ -119,6 +125,7 @@ def _parse_select_count(line):
 # List of columns (keys in _values dictionary)
 _cols = ['visit',
          'obj_select_real', 'obj_select_cpu',
+         'obj_last_delete_real', 'obj_last_insert_real',
          'obj_trunc_real', 'obj_trunc_cpu',
          'obj_insert_real', 'obj_insert_cpu',
          'src_select_real', 'src_select_cpu',
