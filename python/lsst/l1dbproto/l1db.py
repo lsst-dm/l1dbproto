@@ -183,8 +183,9 @@ class L1db(object):
         self._dia_object_index = options.get('dia_object_index', 'baseline')
         self._months_sources = int(options.get('read_sources_months', 0))
         self._months_fsources = int(options.get('read_forced_sources_months', 0))
-        self._read_full_objects = bool(options.get('read_full_objects', 0))
+        self._read_full_objects = bool(int(options.get('read_full_objects', 0)))
         self._source_select = options.get('source_select', "by-fov")
+        self._object_last_replace = bool(int(options.get('object_last_replace', 0)))
 
         if self._dia_object_index not in ('baseline', 'htm20_id_iov', 'last_object_table'):
             raise ValueError('unexpected dia_object_index value: ' + str(self._dia_object_index))
@@ -197,6 +198,7 @@ class L1db(object):
         _LOG.info("    read_forced_sources_months: %s", self._months_fsources)
         _LOG.info("    read_full_objects: %s", self._read_full_objects)
         _LOG.info("    source_select: %s", self._source_select)
+        _LOG.info("    object_last_replace: %s", self._object_last_replace)
 
     #-------------------
     #  Public methods --
@@ -406,19 +408,22 @@ class L1db(object):
 
                 table = self._objects_last
 
-                query = 'DELETE FROM "' + table.name + '" '
-                query += 'WHERE "diaObjectId" IN (' + ids + ') '
+                do_replace = self._object_last_replace and conn.engine.name == 'mysql'
 
-                if explain:
-                    # run the same query with explain
-                    self._explain(query, conn)
+                if not do_replace:
+                    query = 'DELETE FROM "' + table.name + '" '
+                    query += 'WHERE "diaObjectId" IN (' + ids + ') '
 
-                with Timer(table.name + ' delete'):
-                    res = conn.execute(sql.text(query))
-                _LOG.debug("deleted %s objects", res.rowcount)
+                    if explain:
+                        # run the same query with explain
+                        self._explain(query, conn)
+
+                    with Timer(table.name + ' delete'):
+                        res = conn.execute(sql.text(query))
+                    _LOG.debug("deleted %s objects", res.rowcount)
 
                 # and insert
-                self._storeObjects(DiaObject, objs, conn, table, explain)
+                self._storeObjects(DiaObject, objs, conn, table, explain, do_replace)
 
             else:
 
@@ -936,7 +941,11 @@ class L1db(object):
 
         fields = ['"' + f + '"' for f in object_type._fields]
 
-        query = 'INSERT INTO "' + table.name + '" (' + ','.join(fields) + ') VALUES '
+        if replace:
+            query = 'REPLACE INTO'
+        else:
+            query = 'INSERT INTO'
+        query += ' "' + table.name + '" (' + ','.join(fields) + ') VALUES '
 
         values = []
         for obj in objects:
