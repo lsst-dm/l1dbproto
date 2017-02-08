@@ -143,7 +143,8 @@ def _htm_indices(xyz, FOV_rad):
     """
 
     dir_v = sphgeom.UnitVector3d(xyz[0], xyz[1], xyz[2])
-    circle = sphgeom.Circle(dir_v, sphgeom.Angle(FOV_rad))
+    # sphgeom.Circle opening angle is actually a half of opening angle
+    circle = sphgeom.Circle(dir_v, sphgeom.Angle(FOV_rad/2))
     _LOG.debug('circle: %s', circle)
     pixelator = sphgeom.HtmPixelization(constants.HTM_LEVEL)
     indices = pixelator.envelope(circle, constants.HTM_MAX_RANGES)
