@@ -23,8 +23,8 @@ import time
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
-from lsst.l1dbproto import constants, DIA, generators, l1db, timer
-from lsst.sphgeom import HtmPixelization, LonLat, UnitVector3d, Vector3d
+from lsst.l1dbproto import constants, DIA, generators, geom, l1db, timer
+from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
 #---------------------
 # Local definitions --
@@ -32,7 +32,10 @@ from lsst.sphgeom import HtmPixelization, LonLat, UnitVector3d, Vector3d
 
 COLOR_RED = '\033[1;31m'
 COLOR_GREEN = '\033[1;32m'
+COLOR_YELLOW = '\033[1;33m'
 COLOR_BLUE = '\033[1;34m'
+COLOR_MAGENTA = '\033[1;35m'
+COLOR_CYAN = '\033[1;36m'
 COLOR_RESET = '\033[0m'
 
 _LOG = logging.getLogger('ap_proto')
@@ -78,16 +81,22 @@ def _visitTimes(start_time, interval_sec, count):
             count -= 1
         dt += delta
 
+# special code to makr sources ouside reagion
+_OUTSIDER = -666
+
+# transient ID start value
+_TRANSIENT_START_ID = 1000000000
 
 #----------------
 #  Application --
 #----------------
 
+
 class APProto(object):
 
     def __init__(self):
 
-        self.lastObjectId = 1000000000
+        self.lastObjectId = _TRANSIENT_START_ID
         self.lastSourceId = 0
 
         descr = 'Script which simulates AP workflow access to L1 database.'
@@ -111,6 +120,8 @@ class APProto(object):
         parser.add_argument('--start-visit-id', type=int, default=1,
                             help='Starting visit ID. Used only at first invocation'
                             ' to intialize database. def: 1')
+        parser.add_argument('--divide', type=int, default=0, metavar='NUM',
+                            help='Divide FOV into NUM*NUM tiles for parallel processing')
 
         parser.add_argument('sources_file', help='Name of input file with sources')
         # add more command line options
@@ -135,6 +146,9 @@ class APProto(object):
             self.args.start_visit_id = last_visit.visitId + 1
             self.args.start_time = last_visit.visitTime + timedelta(seconds=self.args.interval)
 
+        if self.args.divide > 1:
+            _LOG.info("Will divide FOV into %dx%d regions", self.args.divide, self.args.divide)
+
         # read sources file
         _LOG.info("Start loading variable sources from %r", self.args.sources_file)
         var_sources = numpy.load(self.args.sources_file)
@@ -152,11 +166,16 @@ class APProto(object):
         # diaSourceId for last DIA source stored in database
         if last_visit is not None and last_visit.lastSourceId is not None:
             self.lastSourceId = max(self.lastSourceId, last_visit.lastSourceId)
-        _LOG.debug("lastSourceId: %s", self.lastSourceId)
+        _LOG.info("lastSourceId: %s", self.lastSourceId)
 
         # loop over visits
         visitTimes = _visitTimes(self.args.start_time, self.args.interval, self.args.num_visits)
         for visit_id, dt in enumerate(visitTimes, self.args.start_visit_id):
+
+            if visit_id % 1000 == 0:
+                _LOG.info(COLOR_YELLOW + "+++ Start daily activities" + COLOR_RESET)
+                db.dailyJob()
+                _LOG.info(COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET)
 
             _LOG.info(COLOR_GREEN + "+++ Start processing visit %s at %s" + COLOR_RESET, visit_id, dt)
             loop_timer = timer.Timer().start()
@@ -164,9 +183,12 @@ class APProto(object):
             with timer.Timer("DIA"):
                 # point telescope in random southern direction
                 pointing_xyz = generators.rand_sphere_xyz(1, -1)[0]
-                pointing_v = Vector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
+                pointing_v = UnitVector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
                 ra = LonLat.longitudeOf(pointing_v).asDegrees()
                 decl = LonLat.latitudeOf(pointing_v).asDegrees()
+
+                # sphgeom.Circle opening angle is actually a half of opening angle
+                region = Circle(pointing_v, Angle(constants.FOV_rad/2))
 
                 _LOG.info("Pointing ra, decl = %s, %s; xyz = %s", ra, decl, pointing_xyz)
 
@@ -174,89 +196,164 @@ class APProto(object):
                 dia = DIA.DIA(pointing_xyz, constants.FOV_rad, var_sources,
                               constants.N_FALSE_PER_VISIT + constants.N_TRANS_PER_VISIT)
                 sources, indices = dia.makeSources()
-                n_sources = len(sources)
-                _LOG.info("DIA generated %s sources", n_sources)
+                _LOG.info("DIA generated %s sources", len(sources))
+
+                # assign IDs to transients
+                for i in range(len(sources)):
+                    if indices[i] < 0:
+                        self.lastObjectId += 1
+                        indices[i] = self.lastObjectId
 
             # print current database row counts, this takes long time
             # so only do it once in a while
-            if visit_id % 10 == 0:
+            if visit_id % 50 == 0:
                 counts = db.tableRowCount()
-                for tbl in sorted(counts.keys()):
-                    _LOG.info('%s row count: %s', tbl, counts[tbl])
+                for tbl, count in sorted(counts.items()):
+                    _LOG.info('%s row count: %s', tbl, count)
 
             # numpy seems to do some multi-threaded stuff which "leaks" CPU cycles to the code below
             # and it gets counted as resource usage in timers, add a short delay here so that threads
             # finish and don't influence our timers below.
             time.sleep(0.1)
 
-            with timer.Timer("Objects-read"):
+            with timer.Timer("VisitProcessing"):
 
-                # Retrieve DiaObjects (latest versions) from database for matching,
-                # this will produce wider coverage so further filtering is needed
-                latest_objects = db.getDiaObjects(pointing_xyz, constants.FOV_rad,
-                                                  explain=self.args.explain)
-                _LOG.info('database found %s objects', len(latest_objects))
+                if self.args.divide > 1:
 
-                # filter database obects to a mask
-                latest_objects = self._filterDiaObjects(latest_objects, pointing_xyz, constants.FOV_rad)
-                _LOG.info('after filtering %s objects', len(latest_objects))
+                    tiles = geom.make_square_tiles(
+                        constants.FOV_rad, self.args.divide, self.args.divide, pointing_v)
 
-            with timer.Timer("S2O-matching"):
+                    # spawn subprocesses to handle individual tiles
+                    children = []
+                    for ix, iy, region in tiles:
 
-                # create all new DiaObjects
-                objects = self._makeDiaObjects(sources, indices, dt)
+                        # make sure lastSourceId is unique in in each process
+                        self.lastSourceId += len(sources)
+                        tile = (ix, iy)
 
-                # do forced photometry on non-detected objects (extends objects)
-                self._forcedPhotometry(objects, latest_objects, dt)
+                        pid = os.fork()
+                        if pid == 0:
+                            # child
 
-                # Store all sources
-                srcs = self._makeDiaSources(sources, indices, visit_id)
+                            self.visit(db, visit_id, dt, region, sources, indices, tile)
+                            # stop here
+                            sys.exit(0)
 
-                # make forced sources for every object
-                fsrcs = self._makeDiaForcedSources(objects, visit_id)
+                        else:
+                            _LOG.debug("Forked process %d for tile %s", pid, tile)
+                            children.append(pid)
 
-            with timer.Timer("Source-read"):
+                    # wait until all children finish
+                    for pid in children:
+                        try:
+                            pid, status = os.waitpid(pid, 0)
+                            if status != 0:
+                                _LOG.warn(COLOR_RED + "Child process PID=%s failed: %s" +
+                                          COLOR_RESET, pid, status)
+                        except OSError as exc:
+                            _LOG.warn(COLOR_RED + "wait failed for PID=%s: %s" +
+                                      COLOR_RESET, pid, exc)
 
-                read_srcs = db.getDiaSources(pointing_xyz, constants.FOV_rad, latest_objects,
-                                             explain=self.args.explain)
-                _LOG.info('database found %s sources', len(read_srcs))
+                else:
 
-                read_srcs = db.getDiaFSources(latest_objects, explain=self.args.explain)
-                _LOG.info('database found %s forced sources', len(read_srcs))
+                    # do it in-process
+                    self.visit(db, visit_id, dt, region, sources, indices)
 
-            if not self.args.no_update:
+                if not self.args.no_update:
+                    # store last visit info
+                    db.saveVisit(visit_id, dt)
 
-                with timer.Timer("L1-store"):
+            _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" +
+                      COLOR_RESET, visit_id, loop_timer)
 
-                    # store new versions of objects
+    def visit(self, db, visit_id, dt, region, sources, indices, tile=None):
+        """AP processing of a single visit (with known sources)
+
+        Parameters
+        ----------
+        visit_id : `int`
+        dt : `datetime`
+            Time of visit
+        region : `sphgem.Region`
+            Region, could be thw whole FOV (Circle) or small piece of it
+        sources : `numpy.array`
+            Array of xyz coordinates of sources, this hass all visit sources,
+            not only current tile
+        indices : `numpy.array`
+        tile : `tuple`
+        """
+
+        name = ""
+        if tile is not None:
+            name = "tile={}x{} ".format(*tile)
+
+        # make a mask
+        for i in range(len(sources)):
+            xyz = sources[i]
+            if not region.contains(UnitVector3d(xyz[0], xyz[1], xyz[2])):
+                indices[i] = _OUTSIDER
+
+        with timer.Timer(name+"Objects-read"):
+
+            # Retrieve DiaObjects (latest versions) from database for matching,
+            # this will produce wider coverage so further filtering is needed
+            latest_objects = db.getDiaObjects(region, explain=self.args.explain)
+            _LOG.info(name+'database found %s objects', len(latest_objects))
+
+            # filter database obects to a mask
+            latest_objects = self._filterDiaObjects(latest_objects, region)
+            _LOG.info(name+'after filtering %s objects', len(latest_objects))
+
+        with timer.Timer(name+"S2O-matching"):
+
+            # create all new DiaObjects
+            objects = self._makeDiaObjects(sources, indices, dt)
+
+            # do forced photometry on non-detected objects (extends objects)
+            self._forcedPhotometry(objects, latest_objects, dt)
+
+            # Store all sources
+            srcs = self._makeDiaSources(sources, indices, visit_id)
+
+            # make forced sources for every object
+            fsrcs = self._makeDiaForcedSources(objects, visit_id)
+
+        with timer.Timer(name+"Source-read"):
+
+            read_srcs = db.getDiaSources(region, latest_objects, explain=self.args.explain)
+            _LOG.info(name+'database found %s sources', len(read_srcs))
+
+            read_srcs = db.getDiaFSources(latest_objects, explain=self.args.explain)
+            _LOG.info(name+'database found %s forced sources', len(read_srcs))
+
+        if not self.args.no_update:
+
+            with timer.Timer(name+"L1-store"):
+
+                # store new versions of objects
+                _LOG.info(name+'will store %d Objects', len(objects))
+                if objects:
                     db.storeDiaObjects(objects, dt, explain=self.args.explain)
 
-                    # store all sources
+                # store all sources
+                _LOG.info(name+'will store %d Sources', len(srcs))
+                if srcs:
                     db.storeDiaSources(srcs, explain=self.args.explain)
 
-                    # store all forced sources
+                # store all forced sources
+                _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
+                if fsrcs:
                     db.storeDiaForcedSources(fsrcs, explain=self.args.explain)
 
-                # store last visit info
-                db.saveVisit(visit_id, dt)
-
-            _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" + COLOR_RESET, visit_id, loop_timer)
-
-    def _filterDiaObjects(self, latest_objects, pointing_xyz, FOV_rad):
+    def _filterDiaObjects(self, latest_objects, region):
         """
-        Filter out objects from a list which are outside visible area.
+        Filter out objects from a list which are outside region.
         """
-        cos_min = math.cos(FOV_rad / 2)
-        dir_p = Vector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
-        # _LOG.debug('cos_min: %s dir_p: %s', cos_min, dir_p)
-
         res = []
         for obj in latest_objects:
             lonLat = LonLat.fromDegrees(float(obj.ra), float(obj.decl))
             dir_obj = UnitVector3d(lonLat)
-            cos_obj = dir_obj.dot(dir_p)
-            # _LOG.debug('%s %s %s', cos_obj, dir_obj, lonLat)
-            if cos_obj > cos_min:
+            if region.contains(dir_obj):
                 res.append(obj)
 
         return res
@@ -274,14 +371,12 @@ class APProto(object):
         n_trans = 0
         for i in range(len(sources)):
 
-            xyz = sources[i]
             var_idx = int(indices[i])
-            if var_idx < 0:
-                # non-matched source, create new DiaObject
-                self.lastObjectId += 1
-                var_idx = self.lastObjectId
-                # update index with newly-generated one
-                indices[i] = var_idx
+            if var_idx == _OUTSIDER:
+                continue
+
+            xyz = sources[i]
+            if var_idx >= _TRANSIENT_START_ID:
                 n_trans += 1
 
             v3d = Vector3d(xyz[0], xyz[1], xyz[2])
@@ -341,9 +436,11 @@ class APProto(object):
         srcs = []
         for i in range(len(sources)):
 
-            xyz = sources[i]
             var_idx = int(indices[i])
+            if var_idx == _OUTSIDER:
+                continue
 
+            xyz = sources[i]
             v3d = Vector3d(xyz[0], xyz[1], xyz[2])
             ra = LonLat.longitudeOf(v3d).asDegrees()
             decl = LonLat.latitudeOf(v3d).asDegrees()
