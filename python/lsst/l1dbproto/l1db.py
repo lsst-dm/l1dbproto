@@ -24,6 +24,7 @@ from lsst import sphgeom
 import sqlalchemy
 from sqlalchemy import (Column, engine, event, func, Index, MetaData,
                         PrimaryKeyConstraint, sql, Table)
+from sqlalchemy.pool import NullPool
 
 #----------------------------------
 # Local non-exported definitions --
@@ -43,8 +44,8 @@ class Timer(object):
         """
         Enter context, start timer
         """
-        event.listen(engine.Engine, "before_cursor_execute", self._start_timer)
-        event.listen(engine.Engine, "after_cursor_execute", self._stop_timer)
+#         event.listen(engine.Engine, "before_cursor_execute", self._start_timer)
+#         event.listen(engine.Engine, "after_cursor_execute", self._stop_timer)
         self._timer1.start()
         return self
 
@@ -55,8 +56,8 @@ class Timer(object):
         if exc_type is None:
             self._timer1.stop()
             self._timer1.dump()
-        event.remove(engine.Engine, "before_cursor_execute", self._start_timer)
-        event.remove(engine.Engine, "after_cursor_execute", self._stop_timer)
+#         event.remove(engine.Engine, "before_cursor_execute", self._start_timer)
+#         event.remove(engine.Engine, "after_cursor_execute", self._stop_timer)
         return False
 
     def _start_timer(self, conn, cursor, statement, parameters, context, executemany):
@@ -132,21 +133,18 @@ def _row2nt(row, tupletype):
     """
     return tupletype(**dict(row))
 
-def _htm_indices(xyz, FOV_rad):
+def _htm_indices(region):
     """
     Generate a set of HTM indices covering specified field of view.
 
     Retuns sequence of ranges, range is a tuple (minHtmID, maxHtmID).
 
-    @param xyz: pointing direction
-    @param FOV_rad: field of view, radians
+    @param region: sphgeom Region instance
     """
 
-    dir_v = sphgeom.UnitVector3d(xyz[0], xyz[1], xyz[2])
-    circle = sphgeom.Circle(dir_v, sphgeom.Angle(FOV_rad))
-    _LOG.debug('circle: %s', circle)
+    _LOG.debug('circle: %s', region)
     pixelator = sphgeom.HtmPixelization(constants.HTM_LEVEL)
-    indices = pixelator.envelope(circle, constants.HTM_MAX_RANGES)
+    indices = pixelator.envelope(region, constants.HTM_MAX_RANGES)
     for range in indices.ranges():
         _LOG.debug('range: %s %s', pixelator.toString(range[0]), pixelator.toString(range[1]))
 
@@ -169,13 +167,19 @@ class L1db(object):
         """
         @param config:  Configuration file name
         """
-        # instantiate db engine
-        self._engine = engineFactory.getEngineFromFile(config)
-        self._metadata = MetaData(self._engine)
-        self._tables = {}
 
         parser = ConfigParser()
         parser.readfp(open(config), config)
+
+        # engine is reused between multiple processes, make sure that we don't
+        # share connections by disabling pool
+        options = dict(parser.items("database"))
+        self._engine = sqlalchemy.create_engine(options['url'], poolclass=NullPool,
+                                                isolation_level='READ_COMMITTED')
+
+        self._metadata = MetaData(self._engine)
+        self._tables = {}
+
         try:
             options = dict(parser.items("l1db"))
         except NoSectionError:
@@ -256,11 +260,10 @@ class L1db(object):
 
         return res
 
-    def getDiaObjects(self, xyz, FOV_rad, explain=False):
+    def getDiaObjects(self, region, explain=False):
         """
         Returns the list of DiaObject instances around given direction.
-        @param xyz: pointing direction
-        @param FOV_rad: field of view, radians
+        @param region: sphgeom Region instance
         """
 
         query = "SELECT "
@@ -277,7 +280,7 @@ class L1db(object):
         query += ' FROM "' + table.name + '" WHERE ('
 
         # determine indices that we need
-        ranges = _htm_indices(xyz, FOV_rad)
+        ranges = _htm_indices(region)
 
         # build selection
         exprlist = []
@@ -308,13 +311,12 @@ class L1db(object):
         _LOG.debug("found %s DiaObjects", len(objects))
         return objects
 
-    def getDiaSources(self, xyz, FOV_rad, objects, explain=False):
+    def getDiaSources(self, region, objects, explain=False):
         """
         Returns the list of DiaSource instances around given direction or
         matching given DiaObjects.
 
-        @param xyz: pointing direction
-        @param FOV_rad: field of view, radians
+        @param region: sphgeom Region instance
         @param objects: list of DiaObject instances
         """
 
@@ -331,7 +333,7 @@ class L1db(object):
 
         if self._source_select == 'by-fov':
             # determine indices that we need
-            ranges = _htm_indices(xyz, FOV_rad)
+            ranges = _htm_indices(region)
 
             # build selection
             exprlist = []
@@ -471,6 +473,20 @@ class L1db(object):
 
             table = self._forcedSources
             self._storeObjects(DiaForcedSource, sources, conn, table, explain)
+
+    def dailyJob(self):
+        """Implement daily actrivities like cleanup/vacuum.
+        """
+
+        if self._engine.name == 'postgresql':
+
+            # do VACUUM on all tables
+            _LOG.info("Running VACUUM on all tables")
+            connection = self._engine.raw_connection()
+            ISOLATION_LEVEL_AUTOCOMMIT = 0
+            connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cursor = connection.cursor()
+            cursor.execute("VACUUM ANALYSE")
 
     def makeSchema(self, drop=False):
         """
@@ -959,7 +975,7 @@ class L1db(object):
         query += ','.join(values)
 
         # _LOG.debug("query: %s", query)
-        _LOG.info("%s: will store %d recors", table.name, len(objects))
+        _LOG.info("%s: will store %d records", table.name, len(objects))
         with Timer(table.name + ' insert'):
             res = conn.execute(sql.text(query))
         _LOG.debug("inserted %s intervals", res.rowcount)

@@ -102,6 +102,9 @@ def _parse_timers(line):
     elif " L1-store: " in line:
         _values['store_real'] = real
         _values['store_cpu'] = cpu
+    elif " VisitProcessing: " in line:
+        _values['visit_proc_real'] = real
+        _values['visit_proc_cpu'] = cpu
     elif " Finished processing visit " in line:
         _values['visit_real'] = real
         _values['visit_cpu'] = cpu
@@ -134,6 +137,7 @@ _cols = ['visit',
          'fsrc_insert_real', 'fsrc_insert_cpu',
          'select_real',
          'store_real', 'store_cpu',
+         'visit_proc_real', 'visit_proc_cpu',
          'visit_real', 'visit_cpu',
          'obj_selected', 'src_selected', 'fsrc_selected',
          'obj_in_fov',
@@ -173,11 +177,19 @@ def main():
     parser = ArgumentParser(description=descr)
     parser.add_argument('-v', '--verbose', action='count', default=0,
                         help='More verbose output, can use several times.')
+    parser.add_argument('-s', '--short', action='count', default=0,
+                        help='More verbose output, can use several times.')
     parser.add_argument('file', help='Name of input log file', nargs='+')
     args = parser.parse_args()
 
     # configure logging
     _configLogger(args.verbose)
+
+    if args.short:
+        global _cols
+        _cols = ['visit', 'visit_real', 'visit_cpu',
+                 'visit_proc_real', 'visit_proc_cpu',
+                 'obj_count', 'src_count', 'fsrc_count']
 
     # open each file in order
     for input in args.file:

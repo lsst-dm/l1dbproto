@@ -12,29 +12,11 @@ import logging
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
+from .geom import rotation_matrix
 
 #----------------------------------
 # Local non-exported definitions --
 #----------------------------------
-
-
-def _rotation_matrix(a, b):
-    """
-    Create rotation matrix to rotate vector a into b.
-
-    After http://math.stackexchange.com/a/476311
-    """
-
-    v = numpy.cross(a, b)
-    sin = numpy.linalg.norm(v)
-    if sin == 0:
-        return numpy.identity(3)
-    cos = numpy.vdot(a, b)
-    vx = numpy.mat([[0, -v[2], v[1]], [v[2], 0., -v[0]], [-v[1], v[0], 0.]])
-
-    R = numpy.identity(3) + vx + vx * vx * (1 - cos) / (sin ** 2)
-
-    return R
 
 #------------------------
 # Exported definitions --
@@ -89,5 +71,5 @@ def rand_cone_xyz(direction, open_angle, n=1, seed=None):
     res[:, 2] = zs
 
     # rotate
-    R = _rotation_matrix(numpy.array([0., 0., 1.]), direction)
-    return numpy.inner(res, R).A
+    R = rotation_matrix(numpy.array([0., 0., 1.]), direction)
+    return numpy.asarray(numpy.inner(res, R))
