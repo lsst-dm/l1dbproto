@@ -31,8 +31,41 @@ def _configLogger(verbosity):
 
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
+class _Stat:
+
+    def __init__(self, cnt=0, sum=0.):
+        self._cnt = 0
+        self._sum = 0
+
+    def value(self):
+        if self._cnt == 0:
+            return None
+        else:
+            return self._sum / self._cnt
+
+    def add(self, v):
+        self._cnt += 1
+        self._sum += v
+
+    def __add__(self, v):
+        x = _Stat(self._cnt, self._sum)
+        x.add(v)
+        return x
+
+    def __iadd__(self, v):
+        self.add(v)
+        return self
+
+    def __str__(self):
+        v = self.value()
+        if v is None:
+            return "NULL"
+        else:
+            return "{:.6g}".format(v)
+
+
 # dictionary with visit statistics
-_values = defaultdict(lambda: "NULL")
+_values = defaultdict(lambda: _Stat())
 
 
 def _new_visit(line):
@@ -52,11 +85,11 @@ def _parse_counts(line):
     words = line.split()
     count = int(words[-1])
     if "DiaObject" in words:
-        _values['obj_count'] = count
+        _values['obj_count'] += count
     elif "DiaSource" in words:
-        _values['src_count'] = count
+        _values['src_count'] += count
     elif "DiaForcedSource" in words:
-        _values['fsrc_count'] = count
+        _values['fsrc_count'] += count
 
 
 def _parse_timers(line):
@@ -70,44 +103,44 @@ def _parse_timers(line):
     real = float(words[-5])
     cpu = float(words[-3]) + float(words[-1])
     if " DiaObject select: " in line:
-        _values['obj_select_real'] = real
-        _values['obj_select_cpu'] = cpu
-        _values['select_real'] = _values.get('select_real', 0.) + real
+        _values['obj_select_real'] += real
+        _values['obj_select_cpu'] += cpu
+        _values['select_real'] += real
     elif " DiaObject truncate: " in line:
-        _values['obj_trunc_real'] = real
-        _values['obj_trunc_cpu'] = cpu
+        _values['obj_trunc_real'] += real
+        _values['obj_trunc_cpu'] += cpu
     elif " DiaObjectLast delete: " in line:
-        _values['obj_last_delete_real'] = real
-        _values['obj_last_delete_cpu'] = cpu
+        _values['obj_last_delete_real'] += real
+        _values['obj_last_delete_cpu'] += cpu
     elif " DiaObject insert: " in line:
-        _values['obj_insert_real'] = real
-        _values['obj_insert_cpu'] = cpu
+        _values['obj_insert_real'] += real
+        _values['obj_insert_cpu'] += cpu
     elif " DiaObjectLast insert: " in line:
-        _values['obj_last_insert_real'] = real
-        _values['obj_last_insert_cpu'] = cpu
+        _values['obj_last_insert_real'] += real
+        _values['obj_last_insert_cpu'] += cpu
     elif " DiaSource select: " in line:
-        _values['src_select_real'] = real
-        _values['src_select_cpu'] = cpu
-        _values['select_real'] = _values.get('select_real', 0.) + real
+        _values['src_select_real'] += real
+        _values['src_select_cpu'] += cpu
+        _values['select_real'] += real
     elif " DiaSource insert: " in line:
-        _values['src_insert_real'] = real
-        _values['src_insert_cpu'] = cpu
+        _values['src_insert_real'] += real
+        _values['src_insert_cpu'] += cpu
     elif " DiaForcedSource select: " in line:
-        _values['fsrc_select_real'] = real
-        _values['fsrc_select_cpu'] = cpu
-        _values['select_real'] = _values.get('select_real', 0.) + real
+        _values['fsrc_select_real'] += real
+        _values['fsrc_select_cpu'] += cpu
+        _values['select_real'] += real
     elif " DiaForcedSource insert: " in line:
-        _values['fsrc_insert_real'] = real
-        _values['fsrc_insert_cpu'] = cpu
+        _values['fsrc_insert_real'] += real
+        _values['fsrc_insert_cpu'] += cpu
     elif " L1-store: " in line:
-        _values['store_real'] = real
-        _values['store_cpu'] = cpu
+        _values['store_real'] += real
+        _values['store_cpu'] += cpu
     elif " VisitProcessing: " in line:
-        _values['visit_proc_real'] = real
-        _values['visit_proc_cpu'] = cpu
+        _values['visit_proc_real'] += real
+        _values['visit_proc_cpu'] += cpu
     elif " Finished processing visit " in line:
-        _values['visit_real'] = real
-        _values['visit_cpu'] = cpu
+        _values['visit_real'] += real
+        _values['visit_cpu'] += cpu
 
 
 def _parse_select_count(line):
@@ -117,13 +150,13 @@ def _parse_select_count(line):
     words = line.split()
     if "database found" in line:
         if "forced sources" in line:
-            _values['fsrc_selected'] = int(words[-3])
+            _values['fsrc_selected'] += int(words[-3])
         elif "sources" in line:
-            _values['src_selected'] = int(words[-2])
+            _values['src_selected'] += int(words[-2])
         else:
-            _values['obj_selected'] = int(words[-2])
+            _values['obj_selected'] += int(words[-2])
     elif "after filtering" in line:
-        _values['obj_in_fov'] = int(words[-2])
+        _values['obj_in_fov'] += int(words[-2])
 
 # List of columns (keys in _values dictionary)
 _cols = ['visit',
