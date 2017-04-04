@@ -404,14 +404,10 @@ class L1db(object):
 
             if self._dia_object_index == 'last_object_table':
 
-                # insert and replace all records in LAST table, mysql has a non-standard
-                # REPLACE stmt which can do this effiviently but Postgres has no similar
-                # feature so we are doing it hard way - deleting existing records first
-
+                # insert and replace all records in LAST table, mysql and postgres have
+                # non-standard features (handled in _storeObjects)
                 table = self._objects_last
-
-                do_replace = self._object_last_replace and conn.engine.name == 'mysql'
-
+                do_replace = self._object_last_replace
                 if not do_replace:
                     query = 'DELETE FROM "' + table.name + '" '
                     query += 'WHERE "diaObjectId" IN (' + ids + ') '
@@ -424,7 +420,6 @@ class L1db(object):
                         res = conn.execute(sql.text(query))
                     _LOG.debug("deleted %s objects", res.rowcount)
 
-                # and insert
                 self._storeObjects(DiaObject, objs, conn, table, explain, do_replace)
 
             else:
@@ -957,7 +952,7 @@ class L1db(object):
 
         fields = ['"' + f + '"' for f in object_type._fields]
 
-        if replace:
+        if replace and conn.engine.name == 'mysql':
             query = 'REPLACE INTO'
         else:
             query = 'INSERT INTO'
@@ -973,6 +968,14 @@ class L1db(object):
             self._explain(query + values[0], conn)
 
         query += ','.join(values)
+
+        if replace and conn.engine.name == 'postgresql':
+            # This depends on that "replace" can only be true for DiaObjectLast table
+            pk = ('htmId20', 'diaObjectId')
+            query += " ON CONFLICT (\"{}\", \"{}\") DO UPDATE SET ".format(*pk)
+            fields = ['"{0}" = EXCLUDED."{0}"'.format(field)
+                      for field in object_type._fields if field not in pk]
+            query += ', '.join(fields)
 
         # _LOG.debug("query: %s", query)
         _LOG.info("%s: will store %d records", table.name, len(objects))
