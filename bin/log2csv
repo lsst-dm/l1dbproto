@@ -112,12 +112,18 @@ def _parse_timers(line):
     elif " DiaObjectLast delete: " in line:
         _values['obj_last_delete_real'] += real
         _values['obj_last_delete_cpu'] += cpu
-    elif " DiaObject insert: " in line:
+    elif " DiaObject insert: " in line or " DiaObjectNightly insert: " in line:
         _values['obj_insert_real'] += real
         _values['obj_insert_cpu'] += cpu
     elif " DiaObjectLast insert: " in line:
         _values['obj_last_insert_real'] += real
         _values['obj_last_insert_cpu'] += cpu
+    elif " DiaObjectNightly copy: " in line:
+        _values['obj_daily_copy_real'] += real
+        _values['obj_daily_copy_cpu'] += cpu
+    elif " DiaObjectNightly delete: " in line:
+        _values['obj_daily_delete_real'] += real
+        _values['obj_daily_delete_cpu'] += cpu
     elif " DiaSource select: " in line:
         _values['src_select_real'] += real
         _values['src_select_cpu'] += cpu
@@ -199,6 +205,11 @@ _dispatch = [("Start processing visit", _new_visit),
              ("Finished processing visit", _end_visit),  # must be last
              ]
 
+_daily_dispatch = [("Start processing visit", _new_visit),
+                   (": real=", _parse_timers),
+                   ("Done with daily activities", _end_visit),  # must be last
+                   ]
+
 #---------------------------------
 #  Application class definition --
 #---------------------------------
@@ -206,17 +217,21 @@ _dispatch = [("Start processing visit", _new_visit),
 
 def main():
 
-    descr = 'One-line application description.'
+    descr = 'Read ap_proto log and extract few numbers into csv.'
     parser = ArgumentParser(description=descr)
     parser.add_argument('-v', '--verbose', action='count', default=0,
                         help='More verbose output, can use several times.')
-    parser.add_argument('-s', '--short', action='count', default=0,
-                        help='More verbose output, can use several times.')
+    parser.add_argument('-s', '--short', action='store_true', default=False,
+                        help='Save fewer columns into CSV file.')
+    parser.add_argument('-d', '--daily', action='store_true', default=False,
+                        help='Extract numbers from daily activities.')
     parser.add_argument('file', help='Name of input log file', nargs='+')
     args = parser.parse_args()
 
     # configure logging
     _configLogger(args.verbose)
+
+    dispatch = _dispatch
 
     if args.short:
         global _cols
@@ -224,10 +239,16 @@ def main():
                  'visit_proc_real', 'visit_proc_cpu',
                  'obj_count', 'src_count', 'fsrc_count']
 
+    if args.daily:
+        dispatch = _daily_dispatch
+        _cols = ['visit',
+                 'obj_daily_copy_real',
+                 'obj_daily_delete_real']
+
     # open each file in order
     for input in args.file:
         for line in open(input):
-            for match, method in _dispatch:
+            for match, method in dispatch:
                 # if line matches then call corresponding method
                 if match in line:
                     method(line)
