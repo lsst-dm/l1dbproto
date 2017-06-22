@@ -185,6 +185,7 @@ class L1db(object):
         except NoSectionError:
             options = {}
         self._dia_object_index = options.get('dia_object_index', 'baseline')
+        self._dia_object_nightly = bool(int(options.get('dia_object_nightly', 0)))
         self._months_sources = int(options.get('read_sources_months', 0))
         self._months_fsources = int(options.get('read_forced_sources_months', 0))
         self._read_full_objects = bool(int(options.get('read_full_objects', 0)))
@@ -198,6 +199,7 @@ class L1db(object):
 
         _LOG.info("L1DB Configuration:")
         _LOG.info("    dia_object_index: %s", self._dia_object_index)
+        _LOG.info("    dia_object_nightly: %s", self._dia_object_nightly)
         _LOG.info("    read_sources_months: %s", self._months_sources)
         _LOG.info("    read_forced_sources_months: %s", self._months_fsources)
         _LOG.info("    read_full_objects: %s", self._read_full_objects)
@@ -442,7 +444,10 @@ class L1db(object):
                 _LOG.debug("truncated %s intervals", res.rowcount)
 
             # insert new versions
-            table = self._objects
+            if self._dia_object_nightly:
+                table = self._objects_nightly
+            else:
+                table = self._objects
             self._storeObjects(DiaObject, objs, conn, table, explain)
 
     def storeDiaSources(self, sources, explain=False):
@@ -473,6 +478,16 @@ class L1db(object):
         """Implement daily actrivities like cleanup/vacuum.
         """
 
+        # move data from DiaObjectNightly into DiaObject
+        query = 'INSERT INTO "' + self._objects.name + '" '
+        query += 'SELECT * FROM "' + self._objects_nightly.name + '"'
+        with Timer('DiaObjectNightly copy'):
+            res = self._engine.execute(sql.text(query))
+
+        query = 'DELETE FROM "' + self._objects_nightly.name + '"'
+        with Timer('DiaObjectNightly delete'):
+            res = self._engine.execute(sql.text(query))
+
         if self._engine.name == 'postgresql':
 
             # do VACUUM on all tables
@@ -482,6 +497,7 @@ class L1db(object):
             connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cursor = connection.cursor()
             cursor.execute("VACUUM ANALYSE")
+
 
     def makeSchema(self, drop=False):
         """
@@ -510,6 +526,11 @@ class L1db(object):
         diaObject = Table('DiaObject', self._metadata,
                           *(self._object_columns() + constraints),
                           mysql_engine=mysql_engine)
+
+        if self._dia_object_nightly:
+            diaObject = Table('DiaObjectNightly', self._metadata,
+                              *self._object_columns(),
+                              mysql_engine=mysql_engine)
 
         if self._dia_object_index == 'last_object_table':
             constraints = [PrimaryKeyConstraint('htmId20', 'diaObjectId', name='PK_DiaObjectLast'),
@@ -887,6 +908,11 @@ class L1db(object):
     def _objects_last(self):
         """ Lazy reading of table schema """
         return self._table_schema('DiaObjectLast')
+
+    @property
+    def _objects_nightly(self):
+        """ Lazy reading of table schema """
+        return self._table_schema('DiaObjectNightly')
 
     @property
     def _sources(self):
