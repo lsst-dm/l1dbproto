@@ -34,7 +34,17 @@ _LOG = logging.getLogger(__name__)
 
 
 class Timer(object):
+    """Timer class defining context manager which tracks execution timing.
 
+    Typical use:
+
+        with Timer("timer_name"):
+            do_something
+
+    On exit from block it will print elapsed time.
+
+    See also :py:mod:`timer` module.
+    """
     def __init__(self, name, log_before_cursor_execute=False):
         self._log_before_cursor_execute = log_before_cursor_execute
         self._timer1 = timer.Timer(name)
@@ -73,10 +83,21 @@ class Timer(object):
 # Exported definitions --
 #------------------------
 
+#
+# Data classes (named tuples) for data accepted or returned from database methods
+#
+
+
+# Information about single visit
 Visit = namedtuple('Visit', 'visitId visitTime lastObjectId lastSourceId')
+
+# Truncated version of DIAObject, this is returned from database query and it
+# should contain enough info for Source matching
 DiaObject_short = namedtuple('DiaObject_short', """
     diaObjectId lastNonForcedSource ra decl raSigma declSigma ra_decl_Cov htmId20
     """)
+
+# Full version of DIAObject data, this is what we store in the database
 DiaObject = namedtuple('DiaObject', """
     diaObjectId validityStart validityEnd lastNonForcedSource
     ra decl raSigma declSigma ra_decl_Cov
@@ -85,6 +106,8 @@ DiaObject = namedtuple('DiaObject', """
     pmParallaxLnL pmParallaxChi2 pmParallaxNdata
     flags htmId20
     """)
+
+# Truncated version of DIASource data
 DiaSource = namedtuple('DiaSource', """
     diaSourceId ccdVisitId diaObjectId
     prv_procOrder midPointTai
@@ -93,6 +116,8 @@ DiaSource = namedtuple('DiaSource', """
     apFlux apFluxErr snr
     flags htmId20
     """)
+
+# Full version of DIASource data
 DiaSource_full = namedtuple('DiaSource_full', """
     diaSourceId ccdVisitId diaObjectId ssObjectId parentDiaSourceId
     prv_procOrder ssObjectReassocTime midPointTai
@@ -119,6 +144,8 @@ DiaSource_full = namedtuple('DiaSource_full', """
     extendedness spuriousness
     flags htmId20
     """)
+
+# DIAForcedSource data
 DiaForcedSource = namedtuple('DiaForcedSource', """
     diaObjectId  ccdVisitId
     psFlux psFluxSigma
@@ -156,23 +183,24 @@ def _htm_indices(region):
 
 
 class L1db(object):
-    """
-    Interface to L1 database, hides all database access details.
-    """
+    """Interface to L1 database, hides all database access details.
 
-    #----------------
-    #  Constructor --
-    #----------------
+    The implementation is configured via configuration file (to simplify
+    prototyping) which is an INI-format file with all parameters. For an
+    example check cfg/ forder.
+
+    Parameters
+    ----------
+    config : str
+        Name of the configuration file.
+    """
     def __init__(self, config):
-        """
-        @param config:  Configuration file name
-        """
 
         parser = ConfigParser()
         parser.readfp(open(config), config)
 
         # engine is reused between multiple processes, make sure that we don't
-        # share connections by disabling pool
+        # share connections by disabling pool (by using NullPool class)
         options = dict(parser.items("database"))
         self._engine = sqlalchemy.create_engine(options['url'], poolclass=NullPool,
                                                 isolation_level='READ_COMMITTED')
@@ -180,6 +208,7 @@ class L1db(object):
         self._metadata = MetaData(self._engine)
         self._tables = {}
 
+        # get all parameters from config file
         try:
             options = dict(parser.items("l1db"))
         except NoSectionError:
@@ -211,10 +240,14 @@ class L1db(object):
     #-------------------
 
     def lastVisit(self):
-        """
-        Returns last visit information or None if visits table is empty.
+        """Returns last visit information or `None` if visits table is empty.
 
-        @return instance of Visit class or None
+        Visits table is used by ap_proto to track visit information, it is
+        not a part of the regular L1DB schema.
+
+        Returns
+        -------
+        Instance of :py:class:`Visit` class or None.
         """
 
         with self._engine.begin() as conn:
@@ -239,8 +272,14 @@ class L1db(object):
                          lastObjectId=lastObjectId, lastSourceId=lastSourceId)
 
     def saveVisit(self, visitId, visitTime):
-        """
-        Store visit information.
+        """Store visit information.
+
+        Parameters
+        ----------
+        visitId : int
+            Visit identifier
+        visitTime : `datetime.datetime`
+            Visit timestamp.
         """
 
         ins = self._visits.insert().values(visitId=visitId,
@@ -248,8 +287,14 @@ class L1db(object):
         self._engine.execute(ins)
 
     def tableRowCount(self):
-        """
-        Returns dictionary with the table names and row counts.
+        """Returns dictionary with the table names and row counts.
+
+        Used by ap_proto to keep track of the size of the database tables.
+        Depending on database technology this could be expensive operation.
+
+        Returns
+        -------
+        Dict where key is a table mane and value is a row count.
         """
         res = {}
         tables = [self._objects, self._sources, self._forcedSources]
@@ -263,9 +308,23 @@ class L1db(object):
         return res
 
     def getDiaObjects(self, region, explain=False):
-        """
-        Returns the list of DiaObject instances around given direction.
-        @param region: sphgeom Region instance
+        """Returns the list of DiaObject instances from given region.
+
+        Returns only the last version of the the DIAObject. Object are
+        searched based on HTM index. Returned list can contain objects
+        outside given region, further filtering should be applied.
+
+        Parameters
+        ----------
+        region: `sphgeom.Region`
+            Sky region, can be FOV or single CCD.
+        explain: bool
+            If true then also run database query with EXPLAIN, may be
+            useful for understanding query performance.
+
+        Returns
+        -------
+        List of `DiaObject` instances.
         """
 
         query = "SELECT "
@@ -314,12 +373,25 @@ class L1db(object):
         return objects
 
     def getDiaSources(self, region, objects, explain=False):
-        """
-        Returns the list of DiaSource instances around given direction or
+        """Returns the list of DiaSource instances from given region or
         matching given DiaObjects.
 
-        @param region: sphgeom Region instance
-        @param objects: list of DiaObject instances
+        Depending on configuration this method can chose to do spatial
+        qury based on HTM index or select based on DiaObject IDs.
+
+        Parameters
+        ----------
+        region: `sphgeom.Region`
+            Sky region, can be FOV or single CCD.
+        objects : `list`
+            List of `DiaObject` instances
+        explain: bool
+            If true then also run database query with EXPLAIN, may be
+            useful for understanding query performance.
+
+        Returns
+        -------
+        List of `DiaSource` instances.
         """
 
         if self._months_sources == 0:
@@ -360,10 +432,20 @@ class L1db(object):
         return sources
 
     def getDiaFSources(self, objects, explain=False):
-        """
-        Returns the list of DiaForceSource instances matching given DiaObjects.
+        """Returns the list of DiaForceSource instances matching given
+        DiaObjects.
 
-        @param objects: list of DiaObject instances
+        Parameters
+        ----------
+        objects : `list`
+            List of `DiaObject` instances
+        explain: bool
+            If true then also run database query with EXPLAIN, may be
+            useful for understanding query performance.
+
+        Returns
+        -------
+        List of `DiaForcedSource` instances.
         """
 
         if self._months_fsources == 0:
@@ -390,10 +472,17 @@ class L1db(object):
         return sources
 
     def storeDiaObjects(self, objs, dt, explain=False):
-        """
-        @param objs:  list of DiaObject instances
-        @param dt:       datetime for visit
-        @param explain:  if True then do EXPLAIN on INSERT query
+        """Store a set of DIAObjects from current visit.
+
+        Parameters
+        ----------
+        objs : `list`
+            List of `DiaObject` instances to store
+        dt : `datetime.datetime`
+            Time of the visit
+        explain : bool
+            If true then also run database query with EXPLAIN, may be
+            useful for understanding query performance.
         """
 
         ids = sorted([obj.diaObjectId for obj in objs])
@@ -451,9 +540,15 @@ class L1db(object):
             self._storeObjects(DiaObject, objs, conn, table, explain)
 
     def storeDiaSources(self, sources, explain=False):
-        """
-        @param sources:  list of DiaSource instances
-        @param explain:  if True then do EXPLAIN on INSERT query
+        """Store a set of DIASources from current visit.
+
+        Parameters
+        ----------
+        sources : `list`
+            List of `DiaSource` instances to store
+        explain : bool
+            If true then also run database query with EXPLAIN, may be
+            useful for understanding query performance.
         """
 
         # everything to be done in single transaction
@@ -463,9 +558,15 @@ class L1db(object):
             self._storeObjects(DiaSource, sources, conn, table, explain)
 
     def storeDiaForcedSources(self, sources, explain=False):
-        """
-        @param sources:  list of DiaForcedSource instances
-        @param explain:  if True then do EXPLAIN on INSERT query
+        """Store a set of DIAForcedSources from current visit.
+
+        Parameters
+        ----------
+        sources : `list`
+            List of `DiaForcedSource` instances to store
+        explain : bool
+            If true then also run database query with EXPLAIN, may be
+            useful for understanding query performance.
         """
 
         # everything to be done in single transaction
@@ -475,7 +576,10 @@ class L1db(object):
             self._storeObjects(DiaForcedSource, sources, conn, table, explain)
 
     def dailyJob(self):
-        """Implement daily actrivities like cleanup/vacuum.
+        """Implement daily activities like cleanup/vacuum.
+
+        What should be done during daily cleanup is determined by
+        configuration/schema.
         """
 
         # move data from DiaObjectNightly into DiaObject
@@ -500,8 +604,12 @@ class L1db(object):
 
 
     def makeSchema(self, drop=False):
-        """
-        Create all tables
+        """Create or re-create all tables.
+
+        Parameters
+        ----------
+        drop : boolean
+            If True then drop tables before creating new ones.
         """
 
         mysql_engine = 'InnoDB'
@@ -777,7 +885,8 @@ class L1db(object):
         self._metadata.create_all()
 
     def _object_columns(self):
-
+        """Return set of columns in DIAObject table
+        """
         DOUBLE = self._make_doube_type()
         FLOAT = sqlalchemy.types.Float
         DATETIME = sqlalchemy.types.TIMESTAMP
@@ -956,11 +1065,19 @@ class L1db(object):
         Generic store method.
 
         Stores a bunch of objects as records in a table.
-        @param object_type: Namedtuple type, e.g. DiaSource
-        @param objects:     Sequence of objects of the `object_type` type
-        @param conn:        Database connection
-        @param table:       Database table
-        @param explain:     If True then do EXPLAIN on INSERT query
+
+        Parameters
+        ----------
+        object_type : `type`
+            Namedtuple type, e.g. DiaSource
+        objects : `list`
+            Sequence of objects of the `object_type` type
+        conn :
+            Database connection
+        table :
+            Database table (SQLAlchemy table instance)
+        explain : bool
+            If True then do EXPLAIN on INSERT query
         """
 
         def quoteValue(v):
