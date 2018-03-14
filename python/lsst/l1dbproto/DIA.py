@@ -75,7 +75,7 @@ class DIA(object):
 
         var_indices = numpy.nonzero(products > cos_open)
 
-        n_trans = numpy.random.poisson(self._n_trans, 1)
+        n_trans = numpy.random.poisson(self._n_trans)
         transients = generators.rand_cone_xyz(self._xyz, self._open_angle, n_trans)
 
         sources = numpy.concatenate((self._vars[var_indices], transients))
