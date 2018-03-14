@@ -6,6 +6,7 @@ Module defining L1db class and related methods.
 #  Imports of standard modules --
 #--------------------------------
 from collections import namedtuple
+from contextlib import contextmanager
 from datetime import datetime
 import logging
 import math
@@ -176,6 +177,17 @@ def _htm_indices(region):
         _LOG.debug('range: %s %s', pixelator.toString(range[0]), pixelator.toString(range[1]))
 
     return indices.ranges()
+
+
+@contextmanager
+def _ansi_session(engine):
+    """Returns a connection, makes sure that ANSI mode is set for MySQL
+    """
+    with engine.begin() as conn:
+        if engine.name == 'mysql':
+            conn.execute(sql.text("SET SESSION SQL_MODE = 'ANSI'"))
+        yield conn
+    return
 
 #---------------------
 #  Class definition --
@@ -373,7 +385,8 @@ class L1db(object):
 
         # execute select
         with Timer('DiaObject select'):
-            res = self._engine.execute(sql.text(query))
+            with _ansi_session(self._engine) as conn:
+                res = conn.execute(sql.text(query))
         obj_type = DiaObject if self._read_full_objects else DiaObject_short
         objects = [_row2nt(row, obj_type) for row in res]
         _LOG.debug("found %s DiaObjects", len(objects))
@@ -433,7 +446,8 @@ class L1db(object):
 
         # execute select
         with Timer('DiaSource select'):
-            res = self._engine.execute(sql.text(query))
+            with _ansi_session(self._engine) as conn:
+                res = conn.execute(sql.text(query))
         sources = [_row2nt(row, DiaSource_full) for row in res]
         _LOG.debug("found %s DiaSources", len(sources))
         return sources
@@ -473,7 +487,8 @@ class L1db(object):
 
         # execute select
         with Timer('DiaForcedSource select'):
-            res = self._engine.execute(sql.text(query))
+            with _ansi_session(self._engine) as conn:
+                res = conn.execute(sql.text(query))
         sources = [_row2nt(row, DiaForcedSource) for row in res]
         _LOG.debug("found %s DiaForcedSources", len(sources))
         return sources
@@ -496,7 +511,7 @@ class L1db(object):
         _LOG.info("first object ID: %d", ids[0])
 
         # everything to be done in single transaction
-        with self._engine.begin() as conn:
+        with _ansi_session(self._engine) as conn:
 
             ids = ",".join(str(id) for id in ids)
 
@@ -559,7 +574,7 @@ class L1db(object):
         """
 
         # everything to be done in single transaction
-        with self._engine.begin() as conn:
+        with _ansi_session(self._engine) as conn:
 
             table = self._schema.sources
             self._storeObjects(DiaSource, sources, conn, table, explain)
@@ -577,7 +592,7 @@ class L1db(object):
         """
 
         # everything to be done in single transaction
-        with self._engine.begin() as conn:
+        with _ansi_session(self._engine) as conn:
 
             table = self._schema.forcedSources
             self._storeObjects(DiaForcedSource, sources, conn, table, explain)
@@ -590,14 +605,15 @@ class L1db(object):
         """
 
         # move data from DiaObjectNightly into DiaObject
-        query = 'INSERT INTO "' + self._schema.objects.name + '" '
-        query += 'SELECT * FROM "' + self._schema.objects_nightly.name + '"'
-        with Timer('DiaObjectNightly copy'):
-            res = self._engine.execute(sql.text(query))
+        with _ansi_session(self._engine) as conn:
+            query = 'INSERT INTO "' + self._schema.objects.name + '" '
+            query += 'SELECT * FROM "' + self._schema.objects_nightly.name + '"'
+            with Timer('DiaObjectNightly copy'):
+                    res = conn.execute(sql.text(query))
 
-        query = 'DELETE FROM "' + self._schema.objects_nightly.name + '"'
-        with Timer('DiaObjectNightly delete'):
-            res = self._engine.execute(sql.text(query))
+            query = 'DELETE FROM "' + self._schema.objects_nightly.name + '"'
+            with Timer('DiaObjectNightly delete'):
+                res = conn.execute(sql.text(query))
 
         if self._engine.name == 'postgresql':
 
