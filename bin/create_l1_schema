@@ -93,16 +93,16 @@ def main():
     # configure logging
     _configLogger(args.verbose)
 
-    # instantiate db interface
-    db = l1db.L1db(args.config)
-
-    schema_dict = None
+    afw_schemas = None
     if args.association:
-        schema_dict = dict(DiaObject=make_minimal_dia_object_schema(),
+        afw_schemas = dict(DiaObject=make_minimal_dia_object_schema(),
                            DiaSource=make_minimal_dia_source_schema())
 
+    # instantiate db interface
+    db = l1db.L1db(config=args.config, afw_schemas=afw_schemas)
+
     # do it
-    db.makeSchema(schema_dict=schema_dict, drop=args.drop)
+    db.makeSchema(drop=args.drop)
 
 
 #
