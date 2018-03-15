@@ -625,15 +625,22 @@ class L1db(object):
             cursor = connection.cursor()
             cursor.execute("VACUUM ANALYSE")
 
-    def makeSchema(self, drop=False, mysql_engine='InnoDB'):
+    def makeSchema(self, schema_dict=None, drop=False, mysql_engine='InnoDB'):
         """Create or re-create all tables.
 
         Parameters
         ----------
+        schema_dict : `dict`, optional
+            Dictionary with table name for a key and `afw.table.Schema`
+            for a value. Columns in schema will be added to standard
+            L1DB schema.
         drop : boolean
             If True then drop tables before creating new ones.
+        mysql_engine : `str`, optional
+            Name of the MySQL engine to use for new tables.
         """
-        self._schema.makeSchema(drop=drop, mysql_engine=mysql_engine)
+        self._schema.makeSchema(schema_dict=schema_dict, drop=drop,
+                                mysql_engine=mysql_engine)
 
     def _explain(self, query, conn):
         # run the query with explain

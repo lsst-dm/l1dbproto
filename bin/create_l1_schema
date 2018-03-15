@@ -16,6 +16,7 @@ import sys
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
+import lsst.afw.table as afwTable
 from lsst.l1dbproto import l1db
 
 #---------------------
@@ -32,6 +33,43 @@ def _configLogger(verbosity):
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
 
+#
+# Copied from ap_association/dia_object.py
+#
+def make_minimal_dia_object_schema():
+    """ Define and create the minimal schema required for a DIAObject.
+
+    Return
+    ------
+    lsst.afw.table.schema.schema.Schema
+    """
+
+    schema = afwTable.SourceTable.makeMinimalSchema()
+    # For the MVP/S we currently only care about the position though
+    # in the future we will add summary computations for fluxes etc.
+    # as well as their errors.
+
+    # In the future we would like to store a covariance of the coordinate.
+    # This functionality is not defined in currently in the stack, so we will
+    # hold off until it is implemented. This is to be addressed in DM-7101.
+    schema.addField("indexer_id", type="L")
+    schema.addField("n_dia_sources", type="L")
+
+    return schema
+
+
+def make_minimal_dia_source_schema():
+    """ Define and create the minimal schema required for a DIASource.
+
+    Return
+    ------
+    lsst.afw.table.schema.schema.Schema
+    """
+
+    schema = afwTable.SourceTable.makeMinimalSchema()
+
+    return schema
+
 #---------------------------------
 #  Application class definition --
 #---------------------------------
@@ -47,6 +85,9 @@ def main():
                         'all data in the tables, use with extreme caution')
     parser.add_argument('-c', '--config', default="l1db.cfg",
                         help='Name of the config file, def: l1db.cfg')
+    parser.add_argument('-a', '--association', default=False,
+                        action='store_true',
+                        help='Use afw.table schema from ap_association')
     args = parser.parse_args()
 
     # configure logging
@@ -55,8 +96,13 @@ def main():
     # instantiate db interface
     db = l1db.L1db(args.config)
 
+    schema_dict = None
+    if args.association:
+        schema_dict = dict(DiaObject=make_minimal_dia_object_schema(),
+                           DiaSource=make_minimal_dia_source_schema())
+
     # do it
-    db.makeSchema(args.drop)
+    db.makeSchema(schema_dict=schema_dict, drop=args.drop)
 
 
 #
