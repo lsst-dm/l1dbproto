@@ -8,5 +8,6 @@ DiaObject:
   decl: coord_dec
 DiaSource:
   diaSourceId: id
+  parentDiaSourceId: parent
   ra: coord_ra
   decl: coord_dec

@@ -9,23 +9,17 @@ from collections import namedtuple
 from contextlib import contextmanager
 from datetime import datetime
 import logging
-import math
-import sys
-try:
-    from ConfigParser import ConfigParser, NoSectionError
-except ImportError:
-    from configparser import ConfigParser, NoSectionError
+from configparser import ConfigParser, NoSectionError
 
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
-from . import constants, timer, l1dbschema
-from lsst.db import engineFactory
+import lsst.afw.table as afwTable
 from lsst import sphgeom
 import sqlalchemy
-from sqlalchemy import (Column, engine, event, func, Index,
-                        PrimaryKeyConstraint, sql, Table)
+from sqlalchemy import (func, sql)
 from sqlalchemy.pool import NullPool
+from . import constants, timer, l1dbschema
 
 #----------------------------------
 # Local non-exported definitions --
@@ -72,11 +66,13 @@ class Timer(object):
         return False
 
     def _start_timer(self, conn, cursor, statement, parameters, context, executemany):
+        """Start counting"""
         if self._log_before_cursor_execute:
             _LOG.info("before_cursor_execute")
         self._timer2.start()
 
     def _stop_timer(self, conn, cursor, statement, parameters, context, executemany):
+        """Stop counting"""
         self._timer2.stop()
         self._timer2.dump()
 
@@ -84,82 +80,8 @@ class Timer(object):
 # Exported definitions --
 #------------------------
 
-#
-# Data classes (named tuples) for data accepted or returned from database methods
-#
-
-
 # Information about single visit
 Visit = namedtuple('Visit', 'visitId visitTime lastObjectId lastSourceId')
-
-# Truncated version of DIAObject, this is returned from database query and it
-# should contain enough info for Source matching
-DiaObject_short = namedtuple('DiaObject_short', """
-    diaObjectId lastNonForcedSource ra decl raSigma declSigma ra_decl_Cov htmId20
-    """)
-
-# Full version of DIAObject data, this is what we store in the database
-DiaObject = namedtuple('DiaObject', """
-    diaObjectId validityStart validityEnd lastNonForcedSource
-    ra decl raSigma declSigma ra_decl_Cov
-    radecTai pmRa pmRaSigma pmDecl pmDeclSigma pmRa_pmDecl_Cov
-    parallax parallaxSigma pmRa_parallax_Cov pmDecl_parallax_Cov
-    pmParallaxLnL pmParallaxChi2 pmParallaxNdata
-    flags htmId20
-    """)
-
-# Truncated version of DIASource data
-DiaSource = namedtuple('DiaSource', """
-    diaSourceId ccdVisitId diaObjectId
-    prv_procOrder midPointTai
-    ra raSigma decl declSigma ra_decl_Cov
-    x xSigma y ySigma x_y_Cov
-    apFlux apFluxErr snr
-    flags htmId20
-    """)
-
-# Full version of DIASource data
-DiaSource_full = namedtuple('DiaSource_full', """
-    diaSourceId ccdVisitId diaObjectId ssObjectId parentDiaSourceId
-    prv_procOrder ssObjectReassocTime midPointTai
-    ra raSigma decl declSigma ra_decl_Cov
-    x xSigma y ySigma x_y_Cov
-    apFlux apFluxErr snr
-    psFlux psFluxSigma psRa psRaSigma psDecl psDeclSigma
-    psFlux_psRa_Cov psFlux_psDecl_Cov psRa_psDecl_Cov psLnL psChi2 psNdata
-    trailFlux trailFluxSigma trailRa trailRaSigma trailDecl trailDeclSigma
-    trailLength trailLengthSigma trailAngle trailAngleSigma
-    trailFlux_trailRa_Cov trailFlux_trailDecl_Cov trailFlux_trailLength_Cov
-    trailFlux_trailAngle_Cov trailRa_trailDecl_Cov trailRa_trailLength_Cov
-    trailRa_trailAngle_Cov trailDecl_trailLength_Cov trailDecl_trailAngle_Cov
-    trailLength_trailAngle_Cov trailLnL trailChi2 trailNdata
-    dipMeanFlux dipMeanFluxSigma dipFluxDiff dipFluxDiffSigma dipRa dipRaSigma
-    dipDecl dipDeclSigma dipLength dipLengthSigma dipAngle dipAngleSigma
-    dipMeanFlux_dipFluxDiff_Cov dipMeanFlux_dipRa_Cov dipMeanFlux_dipDecl_Cov
-    dipMeanFlux_dipLength_Cov dipMeanFlux_dipAngle_Cov dipFluxDiff_dipRa_Cov
-    dipFluxDiff_dipDecl_Cov dipFluxDiff_dipLength_Cov dipFluxDiff_dipAngle_Cov
-    dipRa_dipDecl_Cov dipRa_dipLength_Cov dipRa_dipAngle_Cov dipDecl_dipLength_Cov
-    dipDecl_dipAngle_Cov dipLength_dipAngle_Cov dipLnL dipChi2 dipNdata
-    totFlux totFluxErr diffFlux diffFluxErr fpBkgd fpBkgdErr
-    ixx ixxSigma iyy iyySigma ixy ixySigma ixx_iyy_Cov ixx_ixy_Cov iyy_ixy_Cov ixxPSF iyyPSF ixyPSF
-    extendedness spuriousness
-    flags htmId20
-    """)
-
-# DIAForcedSource data
-DiaForcedSource = namedtuple('DiaForcedSource', """
-    diaObjectId  ccdVisitId
-    psFlux psFluxSigma
-    x y
-    flags
-    """)
-
-
-def _row2nt(row, tupletype):
-    """
-    Covert result row into an named tuple.
-    """
-    return tupletype(**dict(row))
 
 def _htm_indices(region):
     """
@@ -173,8 +95,9 @@ def _htm_indices(region):
     _LOG.debug('circle: %s', region)
     pixelator = sphgeom.HtmPixelization(constants.HTM_LEVEL)
     indices = pixelator.envelope(region, constants.HTM_MAX_RANGES)
-    for range in indices.ranges():
-        _LOG.debug('range: %s %s', pixelator.toString(range[0]), pixelator.toString(range[1]))
+    for irange in indices.ranges():
+        _LOG.debug('range: %s %s', pixelator.toString(irange[0]),
+                   pixelator.toString(irange[1]))
 
     return indices.ranges()
 
@@ -199,7 +122,7 @@ class L1db(object):
 
     The implementation is configured via configuration file (to simplify
     prototyping) which is an INI-format file with all parameters. For an
-    example check cfg/ forder.
+    example check cfg/ folder.
 
     Parameters
     ----------
@@ -214,7 +137,8 @@ class L1db(object):
     def __init__(self, config, afw_schemas=None):
 
         parser = ConfigParser()
-        parser.readfp(open(config), config)
+        with open(config) as cfgFile:
+            parser.read_file(cfgFile, config)
 
         # engine is reused between multiple processes, make sure that we don't
         # share connections by disabling pool (by using NullPool class)
@@ -236,6 +160,7 @@ class L1db(object):
         self._object_last_replace = bool(int(options.get('object_last_replace', 0)))
         schema_file = options.get('schema_file')
         extra_schema_file = options.get('extra_schema_file')
+        column_map = options.get('column_map')
 
         if self._dia_object_index not in ('baseline', 'htm20_id_iov', 'last_object_table'):
             raise ValueError('unexpected dia_object_index value: ' + str(self._dia_object_index))
@@ -247,6 +172,7 @@ class L1db(object):
                                              dia_object_nightly=self._dia_object_nightly,
                                              schema_file=schema_file,
                                              extra_schema_file=extra_schema_file,
+                                             column_map=column_map,
                                              afw_schemas=afw_schemas)
 
         _LOG.info("L1DB Configuration:")
@@ -301,7 +227,7 @@ class L1db(object):
 
         Parameters
         ----------
-        visitId : int
+        visitId : `int`
             Visit identifier
         visitTime : `datetime.datetime`
             Visit timestamp.
@@ -319,7 +245,7 @@ class L1db(object):
 
         Returns
         -------
-        Dict where key is a table mane and value is a row count.
+        Dict where key is a table name and value is a row count.
         """
         res = {}
         tables = [self._schema.objects, self._schema.sources, self._schema.forcedSources]
@@ -333,23 +259,29 @@ class L1db(object):
         return res
 
     def getDiaObjects(self, region, explain=False):
-        """Returns the list of DiaObject instances from given region.
+        """Returns catalog of DiaObject instances from given region.
 
-        Returns only the last version of the the DIAObject. Object are
-        searched based on HTM index. Returned list can contain objects
-        outside given region, further filtering should be applied.
+        Returns only the last version of the the DiaObject. Object are
+        searched based on HTM index. Returned catalog contains objects
+        outside given region, further filtering should be applied to
+        restrict returned result set.
+
+        This methods returns `afw.table` catalog with schema determined by
+        the schema of L1 database table. Re-mapping of the column names is
+        done for some columns (based on column map passed to constructor)
+        but types or units are not changed.
 
         Parameters
         ----------
         region: `sphgeom.Region`
             Sky region, can be FOV or single CCD.
-        explain: bool
+        explain: `boolean`
             If true then also run database query with EXPLAIN, may be
             useful for understanding query performance.
 
         Returns
         -------
-        List of `DiaObject` instances.
+        `afw.table.BaseCatalog` instance
         """
 
         query = "SELECT "
@@ -360,7 +292,6 @@ class L1db(object):
         else:
             table = self._schema.objects
         if self._read_full_objects:
-            columns = None
             query += "*"
         else:
             columns = ["diaObjectId", "lastNonForcedSource", "ra", "decl",
@@ -373,12 +304,12 @@ class L1db(object):
 
         # build selection
         exprlist = []
-        for low, up in ranges:
-            up -= 1
-            if low == up:
+        for low, upper in ranges:
+            upper -= 1
+            if low == upper:
                 exprlist.append('"htmId20" = ' + str(low))
             else:
-                exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, up))
+                exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, upper))
         query += ' OR '.join(exprlist)
         query += ')'
 
@@ -396,31 +327,35 @@ class L1db(object):
         with Timer('DiaObject select'):
             with _ansi_session(self._engine) as conn:
                 res = conn.execute(sql.text(query))
-        obj_type = DiaObject if self._read_full_objects else DiaObject_short
-        objects = [_row2nt(row, obj_type) for row in res]
+        objects = self._convertResult(res, "DiaObject")
         _LOG.debug("found %s DiaObjects", len(objects))
         return objects
 
     def getDiaSources(self, region, objects, explain=False):
-        """Returns the list of DiaSource instances from given region or
+        """Returns catalog of DiaSource instances from given region or
         matching given DiaObjects.
 
         Depending on configuration this method can chose to do spatial
-        qury based on HTM index or select based on DiaObject IDs.
+        query based on HTM index or select based on DiaObject IDs.
+
+        This methods returns `afw.table` catalog with schema determined by
+        the schema of L1 database table. Re-mapping of the column names is
+        done for some columns (based on column map passed to constructor)
+        but types or units are not changed.
 
         Parameters
         ----------
         region: `sphgeom.Region`
             Sky region, can be FOV or single CCD.
-        objects : `list`
-            List of `DiaObject` instances
+        objects : `afw.table.BaseCatalog`
+            Catalog of DiaObject records
         explain: bool
             If true then also run database query with EXPLAIN, may be
             useful for understanding query performance.
 
         Returns
         -------
-        List of `DiaSource` instances.
+        `afw.table.BaseCatalog` instance
         """
 
         if self._months_sources == 0:
@@ -440,16 +375,16 @@ class L1db(object):
 
             # build selection
             exprlist = []
-            for low, up in ranges:
-                up -= 1
-                if low == up:
+            for low, upper in ranges:
+                upper -= 1
+                if low == upper:
                     exprlist.append('"htmId20" = ' + str(low))
                 else:
-                    exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, up))
+                    exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, upper))
             query += '(' + ' OR '.join(exprlist) + ')'
         else:
             # select by object id
-            ids = sorted([obj.diaObjectId for obj in objects])
+            ids = sorted([obj['id'] for obj in objects])
             ids = ",".join(str(id) for id in ids)
             query += '"diaObjectId" IN (' + ids + ') '
 
@@ -457,25 +392,30 @@ class L1db(object):
         with Timer('DiaSource select'):
             with _ansi_session(self._engine) as conn:
                 res = conn.execute(sql.text(query))
-        sources = [_row2nt(row, DiaSource_full) for row in res]
+        sources = self._convertResult(res, "DiaSource")
         _LOG.debug("found %s DiaSources", len(sources))
         return sources
 
-    def getDiaFSources(self, objects, explain=False):
-        """Returns the list of DiaForceSource instances matching given
+    def getDiaForcedSources(self, objects, explain=False):
+        """Returns catalog of DiaForceSource instances matching given
         DiaObjects.
+
+        This methods returns `afw.table` catalog with schema determined by
+        the schema of L1 database table. Re-mapping of the column names may
+        be done for some columns (based on column map passed to constructor)
+        but types or units are not changed.
 
         Parameters
         ----------
-        objects : `list`
-            List of `DiaObject` instances
+        objects : `afw.table.BaseCatalog`
+            Catalog of DiaObject records.
         explain: bool
             If true then also run database query with EXPLAIN, may be
             useful for understanding query performance.
 
         Returns
         -------
-        List of `DiaForcedSource` instances.
+        `afw.table.BaseCatalog` instance
         """
 
         if self._months_fsources == 0:
@@ -483,14 +423,14 @@ class L1db(object):
             return []
 
         if not objects:
-            _LOG.info("Skip DiaSources fetching - no Objects")
+            _LOG.info("Skip DiaForceSources fetching - no Objects")
             return []
 
         table = self._schema.forcedSources
         query = 'SELECT *  FROM "' + table.name + '" WHERE '
 
         # select by object id
-        ids = sorted([obj.diaObjectId for obj in objects])
+        ids = sorted([obj["id"] for obj in objects])
         ids = ",".join(str(id) for id in ids)
         query += '"diaObjectId" IN (' + ids + ') '
 
@@ -498,17 +438,30 @@ class L1db(object):
         with Timer('DiaForcedSource select'):
             with _ansi_session(self._engine) as conn:
                 res = conn.execute(sql.text(query))
-        sources = [_row2nt(row, DiaForcedSource) for row in res]
+        sources = self._convertResult(res, "DiaForcedSource")
         _LOG.debug("found %s DiaForcedSources", len(sources))
         return sources
 
     def storeDiaObjects(self, objs, dt, explain=False):
-        """Store a set of DIAObjects from current visit.
+        """Store catalog of DiaObjects from current visit.
+
+        This methods takes `afw.table` catalog, its schema must be
+        compatible with the schema of L1 database table:
+          - column names must correspond to database table columns
+          - some columns names are re-mapped based on column map passed to
+            constructor
+          - types and units of the columns must match database definitions,
+            no unit conversion is performed presently
+          - columns that have default values in database schema can be
+            omitted from afw schema
+          - this method knows how to fill interval-related columns
+            (validityStart, validityEnd) they do not need to appear in
+            afw schema
 
         Parameters
         ----------
-        objs : `list`
-            List of `DiaObject` instances to store
+        objs : `afw.table.BaseCatalog`
+            Catalog with DiaObject records
         dt : `datetime.datetime`
             Time of the visit
         explain : bool
@@ -516,7 +469,7 @@ class L1db(object):
             useful for understanding query performance.
         """
 
-        ids = sorted([obj.diaObjectId for obj in objs])
+        ids = sorted([obj['id'] for obj in objs])
         _LOG.info("first object ID: %d", ids[0])
 
         # everything to be done in single transaction
@@ -527,7 +480,7 @@ class L1db(object):
             if self._dia_object_index == 'last_object_table':
 
                 # insert and replace all records in LAST table, mysql and postgres have
-                # non-standard features (handled in _storeObjects)
+                # non-standard features (handled in _storeObjectsAfw)
                 table = self._schema.objects_last
                 do_replace = self._object_last_replace
                 if not do_replace:
@@ -542,7 +495,11 @@ class L1db(object):
                         res = conn.execute(sql.text(query))
                     _LOG.debug("deleted %s objects", res.rowcount)
 
-                self._storeObjects(DiaObject, objs, conn, table, explain, do_replace)
+                extra_columns = dict(lastNonForcedSource=dt, validityStart=dt,
+                                     validityEnd=None)
+                self._storeObjectsAfw(objs, conn, table, "DiaObject",
+                                      explain=explain, replace=do_replace,
+                                      extra_columns=extra_columns)
 
             else:
 
@@ -568,15 +525,28 @@ class L1db(object):
                 table = self._schema.objects_nightly
             else:
                 table = self._schema.objects
-            self._storeObjects(DiaObject, objs, conn, table, explain)
+            extra_columns = dict(lastNonForcedSource=dt, validityStart=dt,
+                                 validityEnd=None)
+            self._storeObjectsAfw(objs, conn, table, "DiaObject",
+                                  explain=explain, extra_columns=extra_columns)
 
     def storeDiaSources(self, sources, explain=False):
-        """Store a set of DIASources from current visit.
+        """Store catalog of DIASources from current visit.
+
+        This methods takes `afw.table` catalog, its schema must be
+        compatible with the schema of L1 database table:
+          - column names must correspond to database table columns
+          - some columns names may be re-mapped based on column map passed to
+            constructor
+          - types and units of the columns must match database definitions,
+            no unit conversion is performed presently
+          - columns that have default values in database schema can be
+            omitted from afw schema
 
         Parameters
         ----------
-        sources : `list`
-            List of `DiaSource` instances to store
+        sources : `afw.table.BaseCatalog`
+            Catalog containing DiaSource records
         explain : bool
             If true then also run database query with EXPLAIN, may be
             useful for understanding query performance.
@@ -586,15 +556,25 @@ class L1db(object):
         with _ansi_session(self._engine) as conn:
 
             table = self._schema.sources
-            self._storeObjects(DiaSource, sources, conn, table, explain)
+            self._storeObjectsAfw(sources, conn, table, "DiaSource", explain)
 
     def storeDiaForcedSources(self, sources, explain=False):
         """Store a set of DIAForcedSources from current visit.
 
+        This methods takes `afw.table` catalog, its schema must be
+        compatible with the schema of L1 database table:
+          - column names must correspond to database table columns
+          - some columns names may be re-mapped based on column map passed to
+            constructor
+          - types and units of the columns must match database definitions,
+            no unit conversion is performed presently
+          - columns that have default values in database schema can be
+            omitted from afw schema
+
         Parameters
         ----------
-        sources : `list`
-            List of `DiaForcedSource` instances to store
+        sources : `afw.table.BaseCatalog`
+            Catalog containing DiaForcedSource records
         explain : bool
             If true then also run database query with EXPLAIN, may be
             useful for understanding query performance.
@@ -604,7 +584,7 @@ class L1db(object):
         with _ansi_session(self._engine) as conn:
 
             table = self._schema.forcedSources
-            self._storeObjects(DiaForcedSource, sources, conn, table, explain)
+            self._storeObjectsAfw(sources, conn, table, "DiaForcedSource", explain)
 
     def dailyJob(self):
         """Implement daily activities like cleanup/vacuum.
@@ -618,11 +598,11 @@ class L1db(object):
             query = 'INSERT INTO "' + self._schema.objects.name + '" '
             query += 'SELECT * FROM "' + self._schema.objects_nightly.name + '"'
             with Timer('DiaObjectNightly copy'):
-                    res = conn.execute(sql.text(query))
+                conn.execute(sql.text(query))
 
             query = 'DELETE FROM "' + self._schema.objects_nightly.name + '"'
             with Timer('DiaObjectNightly delete'):
-                res = conn.execute(sql.text(query))
+                conn.execute(sql.text(query))
 
         if self._engine.name == 'postgresql':
 
@@ -639,7 +619,7 @@ class L1db(object):
 
         Parameters
         ----------
-        drop : boolean
+        drop : `boolean`
             If True then drop tables before creating new ones.
         mysql_engine : `str`, optional
             Name of the MySQL engine to use for new tables.
@@ -647,7 +627,8 @@ class L1db(object):
         self._schema.makeSchema(drop=drop, mysql_engine=mysql_engine)
 
     def _explain(self, query, conn):
-        # run the query with explain
+        """Run the query with explain
+        """
 
         _LOG.info("explain for query: %s...", query[:64])
 
@@ -664,27 +645,33 @@ class L1db(object):
         else:
             _LOG.info("EXPLAIN returned nothing")
 
-    def _storeObjects(self, object_type, objects, conn, table, explain=False, replace=False):
-        """
-        Generic store method.
+    def _storeObjectsAfw(self, objects, conn, table, schema_table_name,
+                         explain=False, replace=False, extra_columns=None):
+        """Generic store method.
 
-        Stores a bunch of objects as records in a table.
+        Takes catalog of records and stores a bunch of objects in a table.
 
         Parameters
         ----------
-        object_type : `type`
-            Namedtuple type, e.g. DiaSource
-        objects : `list`
-            Sequence of objects of the `object_type` type
+        objects : `afw.table.BaseCatalog`
+            Catalog containing object records
         conn :
             Database connection
-        table :
-            Database table (SQLAlchemy table instance)
-        explain : bool
-            If True then do EXPLAIN on INSERT query
+        table : `sqlalchemy.Table`
+            Database table
+        schema_table_name : `str`
+            Name of the table to be used for finding table schema.
+        explain : `boolean`
+            If `True` then do EXPLAIN on INSERT query
+        replace : `boolean`
+            If `True` then use replace instead of INSERT (should be more efficient)
+        extra_columns : `dict`, optional
+            Mapping (column_name, column_value) which gives column values to add
+            to every row, only if column is missing in catalog records.
         """
 
         def quoteValue(v):
+            """Quote and escape values"""
             if v is None:
                 v = "NULL"
             elif isinstance(v, datetime):
@@ -697,17 +684,35 @@ class L1db(object):
                 v = str(v)
             return v
 
-        fields = ['"' + f + '"' for f in object_type._fields]
+        schema = objects.getSchema()
+        afw_fields = [field.getName() for key, field in schema]
+
+        column_map = self._schema.getAfwColumns(schema_table_name)
+
+        # list of columns (as in cat schema)
+        fields = ['"' + column_map[field].name + '"' for field in afw_fields]
+
+        # use extra columns that are not in fields already
+        extra_fields = (extra_columns or {}).keys()
+        extra_fields = [field for field in extra_fields if field not in fields]
 
         if replace and conn.engine.name == 'mysql':
             query = 'REPLACE INTO'
         else:
             query = 'INSERT INTO'
-        query += ' "' + table.name + '" (' + ','.join(fields) + ') VALUES '
+        query += ' "' + table.name + '" (' + ','.join(fields + extra_fields) + ') VALUES '
 
         values = []
-        for obj in objects:
-            row = [quoteValue(v) for v in obj]
+        for rec in objects:
+            row = []
+            for field in afw_fields:
+                value = rec[field]
+                if column_map[field].type == "DATETIME":
+                    # convert seconds into datetime
+                    value = datetime.utcfromtimestamp(value)
+                row.append(quoteValue(value))
+            for field in extra_fields:
+                row.append(quoteValue(extra_columns[field]))
             values.append('(' + ','.join(row) + ')')
 
         if explain:
@@ -718,10 +723,11 @@ class L1db(object):
 
         if replace and conn.engine.name == 'postgresql':
             # This depends on that "replace" can only be true for DiaObjectLast table
-            pk = ('htmId20', 'diaObjectId')
-            query += " ON CONFLICT (\"{}\", \"{}\") DO UPDATE SET ".format(*pk)
+            pks = ('htmId20', 'diaObjectId')
+            query += " ON CONFLICT (\"{}\", \"{}\") DO UPDATE SET ".format(*pks)
+            fields = [column_map[field].name for field in afw_fields]
             fields = ['"{0}" = EXCLUDED."{0}"'.format(field)
-                      for field in object_type._fields if field not in pk]
+                      for field in fields if field not in pks]
             query += ', '.join(fields)
 
         # _LOG.debug("query: %s", query)
@@ -729,3 +735,35 @@ class L1db(object):
         with Timer(table.name + ' insert'):
             res = conn.execute(sql.text(query))
         _LOG.debug("inserted %s intervals", res.rowcount)
+
+    def _convertResult(self, res, table_name):
+        """Convert result set into output catalog.
+
+        Parameters
+        ----------
+        res : `sqlalchemy.ResultProxy`
+            SQLAlchemy result set returned by query.
+        table_name : `str`
+            Name of the table.
+
+        Returns
+        -------
+        `afw.table.BaseCatalog` instance
+        """
+        # make catalog schema
+        columns = res.keys()
+        schema, col_map = self._schema.getAfwSchema(table_name, columns)
+        _LOG.debug("_convertResult: schema: %s", schema)
+        _LOG.debug("_convertResult: col_map: %s", col_map)
+
+        # fill catalog
+        catalog = afwTable.BaseCatalog(schema)
+        for row in res:
+            record = catalog.addNew()
+            for col, value in row.items():
+                if isinstance(value, datetime):
+                    value = int((value - datetime.utcfromtimestamp(0)).total_seconds())
+                if value is not None:
+                    record.set(col_map[col], value)
+
+        return catalog
