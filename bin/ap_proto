@@ -14,8 +14,6 @@ a database.
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 import logging
-import math
-import numpy
 import os
 import sys
 import time
@@ -23,6 +21,8 @@ import time
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
+import numpy
+import lsst.afw.table as afwTable
 from lsst.l1dbproto import constants, DIA, generators, geom, l1db, timer
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
@@ -81,6 +81,12 @@ def _visitTimes(start_time, interval_sec, count):
             count -= 1
         dt += delta
 
+# def _utc_seconds(dt):
+#     """Convert datetime to POSIX seconds
+#     """
+#     return int((dt - datetime.utcfromtimestamp(0)).total_seconds())
+
+
 # special code to makr sources ouside reagion
 _OUTSIDER = -666
 
@@ -93,6 +99,8 @@ _TRANSIENT_START_ID = 1000000000
 
 
 class APProto(object):
+    """Implementation of Alert Production prototype.
+    """
 
     def __init__(self):
 
@@ -131,6 +139,8 @@ class APProto(object):
         _configLogger(self.args.verbose)
 
     def run(self):
+        """Run whole shebang.
+        """
 
         # instantiate db interface
         db = l1db.L1db(self.args.config)
@@ -159,7 +169,7 @@ class APProto(object):
         if last_visit is not None and last_visit.lastObjectId is not None:
             self.lastObjectId = max(self.lastObjectId, last_visit.lastObjectId)
         if self.lastObjectId < len(var_sources):
-            _LOG.error('next object id is too low: %s', nextObjectId)
+            _LOG.error('next object id is too low: %s', self.lastObjectId)
             return 1
         _LOG.debug("lastObjectId: %s", self.lastObjectId)
 
@@ -248,11 +258,11 @@ class APProto(object):
                         try:
                             pid, status = os.waitpid(pid, 0)
                             if status != 0:
-                                _LOG.warn(COLOR_RED + "Child process PID=%s failed: %s" +
-                                          COLOR_RESET, pid, status)
+                                _LOG.warning(COLOR_RED + "Child process PID=%s failed: %s" +
+                                             COLOR_RESET, pid, status)
                         except OSError as exc:
-                            _LOG.warn(COLOR_RED + "wait failed for PID=%s: %s" +
-                                      COLOR_RESET, pid, exc)
+                            _LOG.warning(COLOR_RED + "wait failed for PID=%s: %s" +
+                                         COLOR_RESET, pid, exc)
 
                 else:
 
@@ -266,6 +276,8 @@ class APProto(object):
             _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" +
                       COLOR_RESET, visit_id, loop_timer)
 
+        return 0
+
     def visit(self, db, visit_id, dt, region, sources, indices, tile=None):
         """AP processing of a single visit (with known sources)
 
@@ -275,11 +287,13 @@ class APProto(object):
         dt : `datetime`
             Time of visit
         region : `sphgem.Region`
-            Region, could be thw whole FOV (Circle) or small piece of it
+            Region, could be the whole FOV (Circle) or small piece of it
         sources : `numpy.array`
-            Array of xyz coordinates of sources, this hass all visit sources,
+            Array of xyz coordinates of sources, this has all visit sources,
             not only current tile
         indices : `numpy.array`
+            array of indices of sources, 1-dim ndarray, transient sources
+            have negative indices
         tile : `tuple`
         """
 
@@ -323,7 +337,7 @@ class APProto(object):
             read_srcs = db.getDiaSources(region, latest_objects, explain=self.args.explain)
             _LOG.info(name+'database found %s sources', len(read_srcs))
 
-            read_srcs = db.getDiaFSources(latest_objects, explain=self.args.explain)
+            read_srcs = db.getDiaForcedSources(latest_objects, explain=self.args.explain)
             _LOG.info(name+'database found %s forced sources', len(read_srcs))
 
         if not self.args.no_update:
@@ -346,28 +360,75 @@ class APProto(object):
                     db.storeDiaForcedSources(fsrcs, explain=self.args.explain)
 
     def _filterDiaObjects(self, latest_objects, region):
-        """
-        Filter out objects from a list which are outside region.
-        """
-        res = []
-        for obj in latest_objects:
-            lonLat = LonLat.fromDegrees(float(obj.ra), float(obj.decl))
-            dir_obj = UnitVector3d(lonLat)
-            if region.contains(dir_obj):
-                res.append(obj)
+        """Filter out objects from a catalog which are outside region.
 
-        return res
+        Parameters
+        ----------
+        latest_objects : `afw.table.BaseCatalog`
+            Catalog containing DiaObject records
+        region : `sphgem.Region`
+
+        Returns
+        -------
+        Filtered `afw.table.BaseCatalog` containing only records contained
+        in the region.
+        """
+        mask = numpy.ndarray(len(latest_objects), dtype=bool)
+        for i, obj in enumerate(latest_objects):
+            # TODO: For now we use L1DB units (degrees), will have to be changed
+            # in case we adopt afw units.
+            lonLat = LonLat.fromDegrees(float(obj['coord_ra']), float(obj['coord_dec']))
+            dir_obj = UnitVector3d(lonLat)
+            mask[i] = region.contains(dir_obj)
+
+        return latest_objects.subset(mask)
+
+    def _makeDiaObjectSchema(self):
+        """Make afw.table schema for DiaObjects.
+
+        Schema should be compatible with L1DB schema and it should contain
+        all fields that have no default values in the schema.
+        """
+        schema = afwTable.Schema()
+        schema.addField("id", "L", doc="unique ID")
+        # TODO: in regular afw.table this should be "Angle" with units="rad",
+        # but l1db does not know about all conversions yet
+        schema.addField("coord_ra", "D", doc="position in ra/dec", units="deg")
+        schema.addField("coord_dec", "D", doc="position in ra/dec", units="deg")
+
+        # L1DB-specific stuff, current implementation knows how to fill
+        # time-related columns
+        # schema.addField("validityStart", "L")
+        # schema.addField("validityEnd", "L")
+        # schema.addField("lastNonForcedSource", "L")
+        schema.addField("htmId20", "L", doc="HTM index")
+
+        return schema
 
     def _makeDiaObjects(self, sources, indices, dt):
-        """
-        Over-simplified implementation of source-to-object matching and
+        """Over-simplified implementation of source-to-object matching and
         new DiaObject generation.
 
         Currently matching is based on info passed along by source
         generator and does not even use DiaObjects from database.
+
+        Parameters
+        ----------
+        sources : `numpy.array`
+            (x, y, z) coordinates of sources, array dimension is (N, 3)
+        indices : `numpy.array`
+            array of indices of sources, 1-dim ndarray, transient sources
+            have negative indices
+        dt : `datetime.datetime`
+            Visit time.
+
+        Returns
+        -------
+        `afw.table.BaseCatalog`
         """
 
-        objects = []
+        schema = self._makeDiaObjectSchema()
+        catalog = afwTable.BaseCatalog(schema)
         n_trans = 0
         for i in range(len(sources)):
 
@@ -385,55 +446,97 @@ class APProto(object):
             dir_v = UnitVector3d(v3d)
             pixelator = HtmPixelization(constants.HTM_LEVEL)
             index = pixelator.index(dir_v)
-            obj = l1db.DiaObject(diaObjectId=var_idx, validityStart=dt, validityEnd=None,
-                                 lastNonForcedSource=dt,
-                                 ra=ra, decl=decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
-                                 radecTai=0., pmRa=0., pmRaSigma=0., pmDecl=0., pmDeclSigma=0.,
-                                 pmRa_pmDecl_Cov=0., parallax=0., parallaxSigma=0.,
-                                 pmRa_parallax_Cov=0., pmDecl_parallax_Cov=0.,
-                                 pmParallaxLnL=0., pmParallaxChi2=0., pmParallaxNdata=0,
-                                 flags=0, htmId20=index)
-            objects += [obj]
-        _LOG.info('found %s matching objects and %s transients/noise', len(objects) - n_trans, n_trans)
 
-        return objects
+            record = catalog.addNew()
+            record.set("id", var_idx)
+            # record.set("validityStart", _utc_seconds(dt))
+            # record.set("validityEnd", 0)
+            # record.set("lastNonForcedSource", _utc_seconds(dt))
+            record.set("coord_ra", ra)
+            record.set("coord_dec", decl)
+            record.set("htmId20", index)
+
+        _LOG.info('found %s matching objects and %s transients/noise', len(catalog) - n_trans, n_trans)
+
+        return catalog
 
     def _forcedPhotometry(self, objects, latest_objects, dt):
-        """
-        Do forced photometry on latest_objects which are not in objects.
+        """Do forced photometry on latest_objects which are not in objects.
 
-        Extends objects list with new DiaObjects.
+        Extends objects catalog with new DiaObjects.
+
+        Parameters
+        ----------
+        objects : `afw.table.BaseCatalog`
+            Catalog containing DiaObject records
+        latest_objects : `afw.table.BaseCatalog`
+            Catalog containing DiaObject records
         """
 
         # Ids of the detected objects
-        ids = set(obj.diaObjectId for obj in objects)
+        ids = set(obj['id'] for obj in objects)
 
         for obj in latest_objects:
             # only do it for 30 days after last detection
-            if obj.diaObjectId in ids:
+            if obj['id'] in ids:
                 continue
-            delta = dt - obj.lastNonForcedSource
+            lastNonForcedSource = datetime.utcfromtimestamp(obj['lastNonForcedSource'])
+            delta = dt - lastNonForcedSource
             if delta > timedelta(days=30):
                 continue
 
-            # make new object with the same ID
-            new_obj = l1db.DiaObject(diaObjectId=obj.diaObjectId, validityStart=dt, validityEnd=None,
-                                     lastNonForcedSource=obj.lastNonForcedSource,
-                                     ra=float(obj.ra), decl=float(obj.decl),
-                                     raSigma=0., declSigma=0., ra_decl_Cov=0.,
-                                     radecTai=0., pmRa=0., pmRaSigma=0., pmDecl=0., pmDeclSigma=0.,
-                                     pmRa_pmDecl_Cov=0., parallax=0., parallaxSigma=0.,
-                                     pmRa_parallax_Cov=0., pmDecl_parallax_Cov=0.,
-                                     pmParallaxLnL=0., pmParallaxChi2=0., pmParallaxNdata=0,
-                                     flags=0, htmId20=obj.htmId20)
-            objects.append(new_obj)
+            record = objects.addNew()
+            record.set("id", obj['id'])
+            # record.set("validityStart", _utc_seconds(dt))
+            # record.set("validityEnd", 0)
+            # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
+            record.set("coord_ra", obj["coord_ra"])
+            record.set("coord_dec", obj["coord_dec"])
+            record.set("htmId20", obj["htmId20"])
+
+    def _makeDiaSourceSchema(self):
+        """Make afw.table schema for DiaSource.
+
+        Schema should be compatible with L1DB schema and it should contain
+        all fields that have no default values in the schema.
+        """
+        schema = afwTable.Schema()
+        schema.addField("id", "L", doc="unique ID")
+        # TODO: in regular afw.table this should be "Angle" with units="rad",
+        # but l1db does not know about all conversions yet
+        schema.addField("coord_ra", "D", doc="position in ra/dec", units="deg")
+        schema.addField("coord_dec", "D", doc="position in ra/dec", units="deg")
+
+        # L1DB-specific stuff
+        schema.addField("diaObjectId", "L")
+        schema.addField("ssObjectId", "L")
+        schema.addField("ccdVisitId", "L")
+        schema.addField("parent", "L")
+        schema.addField("flags", "L")
+        schema.addField("htmId20", "L", doc="HTM index")
+
+        return schema
 
     def _makeDiaSources(self, sources, indices, visit_id):
-        """
-        Generate set of DiaSources to store in a database
+        """Generate catalog of DiaSources to store in a database
+
+        Parameters
+        ----------
+        sources : `numpy.ndarray`
+            (x, y, z) coordinates of sources, array dimension is (N, 3)
+        indices : `numpy.array`
+            array of indices of sources, 1-dim ndarray, transient sources
+            have negative indices
+        visit_id : `int`
+            ID of the visit
+
+        Returns
+        -------
+        `afw.table.BaseCatalog`
         """
 
-        srcs = []
+        schema = self._makeDiaSourceSchema()
+        catalog = afwTable.BaseCatalog(schema)
         for i in range(len(sources)):
 
             var_idx = int(indices[i])
@@ -449,32 +552,60 @@ class APProto(object):
             index = pixelator.index(dir_v)
 
             self.lastSourceId += 1
-            src = l1db.DiaSource(diaSourceId=self.lastSourceId, ccdVisitId=visit_id,
-                                 diaObjectId=var_idx,
-                                 prv_procOrder=0, midPointTai=0.,
-                                 ra=ra, decl=decl, raSigma=0., declSigma=0., ra_decl_Cov=0.,
-                                 x=0., xSigma=0., y=0., ySigma=0., x_y_Cov=0.,
-                                 apFlux=0., apFluxErr=0., snr=5.,
-                                 flags=0, htmId20=index)
-            srcs += [src]
 
-        return srcs
+            record = catalog.addNew()
+            record.set("id", self.lastSourceId)
+            record.set("ccdVisitId", visit_id)
+            record.set("diaObjectId", var_idx)
+            record.set("parent", 0)
+            record.set("coord_ra", ra)
+            record.set("coord_dec", decl)
+            record.set("flags", 0)
+            record.set("htmId20", index)
+
+        return catalog
+
+    def _makeDiaForcedSourceSchema(self):
+        """Make afw.table schema for DiaForcedSource.
+
+        Schema should be compatible with L1DB schema and it should contain
+        all fields that have no default values in the schema.
+        """
+        schema = afwTable.Schema()
+
+        # L1DB-specific stuff
+        schema.addField("diaObjectId", "L")
+        schema.addField("ccdVisitId", "L")
+        schema.addField("flags", "L")
+
+        return schema
 
     def _makeDiaForcedSources(self, objects, visit_id):
-        """
-        Generate set of DiaForcedSources to store in a database
+        """Generate catalog of DiaForcedSources to store in a database.
+
+        Parameters
+        ----------
+        objects : `afw.table.BaseCatalog`
+            Catalog containing DiaObject records
+        visit_id : `int`
+            ID of the visit
+
+        Returns
+        -------
+        `afw.table.BaseCatalog`
         """
 
-        fsrcs = []
+        schema = self._makeDiaForcedSourceSchema()
+        catalog = afwTable.BaseCatalog(schema)
         for obj in objects:
 
-            src = l1db.DiaForcedSource(diaObjectId=obj.diaObjectId, ccdVisitId=visit_id,
-                                       psFlux=0., psFluxSigma=0.,
-                                       x=0., y=0.,
-                                       flags=0)
-            fsrcs += [src]
+            record = catalog.addNew()
+            record.set("diaObjectId", obj['id'])
+            record.set("ccdVisitId", visit_id)
+            record.set("flags", 0)
 
-        return fsrcs
+        return catalog
+
 
 #
 #  run application when imported as a main module

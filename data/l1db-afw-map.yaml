@@ -1,0 +1,13 @@
+# This file defines mapping between L1DB column names and afw.table column
+# names. Top-level structure is a dictionary indexed by table name and the
+# values are dictionaries where key is the name of column in L1DB and value
+# is the name of the column in afw.table
+DiaObject:
+  diaObjectId: id
+  ra: coord_ra
+  decl: coord_dec
+DiaSource:
+  diaSourceId: id
+  parentDiaSourceId: parent
+  ra: coord_ra
+  decl: coord_dec

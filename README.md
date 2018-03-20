@@ -20,20 +20,20 @@ There are several related pieces of code in this package:
 The prototype workflow should, to the best of my knowledge, more or less
 reflect what is happening in the real AP system but with some details missing.
 Here is the steps of visit processing that are implemented in `ap_proto`:
-- extract DIASources from the visit images, this is simulated by `DIA` module
-  just generating a bunch of DIASources base on the list of known variable
+- extract DiaSources from the visit images, this is simulated by `DIA` module
+  just generating a bunch of DiaSources base on the list of known variable
   sources (plus a number of purely random sources from noise)
-- _reads latest version of DIAObjects_ from L1DB corresponding to visit FOV,
+- _reads latest version of DiaObjects_ from L1DB corresponding to visit FOV,
   database selection is based on HTM so it returns wider set of Objects that
   needs to be truncated to fit image extent
-- perform source-to-object matching against DIAObjects read in previous step
-- do forced photometry for DIAObjects without match, create DIAForcedSources
-- _retrieve history of DIASources_ (typically few months) matching all
-  DIAObjects
-- _same for DIAForcedSources_ (for shorter period)
-- build new versions of DIAObjects from DIASources and DIAForcedSources
-- _saves new DIAObjects_ in L1DB
-- _saves new DIASources and DIAForcedSources_ in L1DB
+- perform source-to-object matching against DiaObjects read in previous step
+- do forced photometry for DiaObjects without match, create DiaForcedSources
+- _retrieve history of DiaSources_ (typically few months) matching all
+  DiaObjects
+- _same for DiaForcedSources_ (for shorter period)
+- build new versions of DiaObjects from DiaSources and DiaForcedSources
+- _saves new DiaObjects_ in L1DB
+- _saves new DiaSources and DiaForcedSources_ in L1DB
 
 In the above list database operations (_marked with emphasis_) consist of
 reading all three types of DIA entities and writing updated ones back to the
@@ -42,36 +42,35 @@ database.
 ## Database API
 
 Class `l1db.L1db` implements database API which defines schema and stores and
-restores DIA(Forced)Sources and DIAObjects in the database. The schema can be
+restores Dia(Forced)Sources and DiaObjects in the database. The schema can be
 complicated and have different optimizations built-in but API is supposed to
 handle all complexities and it should operate at the level of science objects
 only.
 
 ### Data types
 
-`l1db.L1db` methods accept or return DIA records as instances of special Python
-classes. Those classes are defined now in `l1db` modules, here is their brief
-description (consult source for more details):
-- `l1db.DiaObject_short` - this type is used to return data from
-  `getDiaObjects()` method when `read_full_objects` (see configuration
-  below) is set to 0.
-- `l1db.DiaObject` - this type is expected by `storeDiaObjects()` method,
-  it is also used as return data type for `getDiaObjects()` method when
-  `read_full_objects` is non-zero.
-- `l1db.DiaSource_full` - this type is returned by `getDiaSources()` method.
-- `l1db.DiaSource` - this type is accepted by `storeDiaSources()` method (this
-  is probably an oversight, should have used DiaSource_full for this too).
-- `l1db.DiaForcedSource` - this type is returned by `getDiaFSources()` method
-  and is accepted by `storeDiaForcedSources()` method.
+`l1db.L1db` methods accept or return DIA records as `afw.table` catalogs. It
+supports renaming of some schema columns between L1DB schema (as defined in
+`cat` package) and `afw.table` convention:
+- `diaObjectId` <-> `id` (for DiaObject table)
+- `diaSourceId` <-> `id` (for DiaSource table)
+- `ra` <-> `coord_ra`
+- `decl` <-> `coord_dec`
+- `parentDiaSourceId` <-> `parent` (for DiaSource table)
 
-For now this types are defined as `namedtuple` types. Time-related attributes
-in these types should hold instances of `datetime.datetime` classes.
+Other column names are passed without any change.
+
+Current implementation does not support unit conversion and expects that
+`afw.table` schema follows L1DB conventions (as defined in DPDD/`cat`).
+In particular this means that angles in schema should be specified in
+degrees, which is different from standard `afw.table` units (rad).
 
 ### Instantiating L1db
 
-Constructor of `l1db.L1db` takes one argument - name of the configuration file
-that defines all relevant parameters (this was done to simplify development
-during prototyping).
+Constructor of `l1db.L1db` takes two arguments:
+- name of the configuration file that defines all relevant parameters
+  (this was done to simplify development during prototyping)
+- optional dictionary mapping table names into `afw.table.Schema` instances
 
 Configuration file contains small number of parameters which determine how to
 connect to database, what kind of schema L1DB has and few other options. There
@@ -119,6 +118,34 @@ read_full_objects = 0
 source_select = by-oid
 ```
 
+Second argument is used to pass `afw.table` schemas that client code is using
+for catalogs. Any columns that are not defined in standard DPDD schema but
+appear in second argument will be added to the schema managed by `L1db`.
+This needs to be defined consistently when creating schema (with `makeSchema()`
+method) and other data access methods.
+
+Example of instantiating `L1db`:
+
+    from lsst.l1dbproto import l1db
+
+    afw_schemas = dict(DiaObject=afwObjectSchema,
+                       DiaSource=afwSourceSchema)
+    db = l1db.L1db(config, afw_schemas)
+
+
+### Initializing database schema
+
+There is a single method that creates all necessary tables in a database.
+
+#### `L1db.makeSchema(self, drop=False)`
+
+Optional `drop` argument causes existing tables to be removed if set to `True`.
+This method needs to be called once before any other work can be performed
+on a database. Script `create_l1_schema` is a command line wrapper for this
+method but it only knows about standard DPDD schema. If schema needs to be
+extended (by passing `afw.table` schemas to `L1db` constructor) this method
+should be called from an application that is aware of the extended schema.
+
 
 ### Reading data from database
 
@@ -128,43 +155,49 @@ type.
 
 #### `L1db.getDiaObjects(self, region, explain=False)`
 
-Retrieves most recent version of each DIAObject from specified region or
-near it. `region` is an instance of `sphgeom.Region` type. DIAObject search
+Retrieves most recent version of each DiaObject from specified region or
+near it. `region` is an instance of `sphgeom.Region` type. DiaObject search
 is based on HTM index and returned set can also include records outside
 specified region, so some filtering will be needed on client side.
 
-Returns list of `l1db.DiaObject_short` instances if `read_full_objects`
-(in `l1db` section) is set to zero in config file, otherwise returns
-`l1db.DiaObject` instances.
+Returns `afw.table` catalog of DiaObject instances. If `read_full_objects`
+(in `l1db` section) is set to zero in config file returned catalog will only
+include a small set of columns, otherwise all columns in database table will
+be returned in a catalog schema.
 
 
 #### `L1db.getDiaSources(self, region, objects, explain=False)`
 
-Retrieves history of the DIASources from a given region matching given
-DIAObjects. `region` is an instance of `sphgeom.Region` type, `objects` is
-a list of `DiaObject` (or `DiaObject_short`) instances.
+Retrieves history of the DiaSources from a given region matching given
+DiaObjects. `region` is an instance of `sphgeom.Region` type, `objects` is
+a catalog of `DiaObject` records (only `id` field of `DiaObject` is used
+so schema can be anything as long as `id` field is defined).
 
 One of `region` or `objects` can be ignored when selecting records from
 database. Currently if `source_select` config parameter is set to `by-oid`
-then DIAOject IDs are used for selection, if `source_select` is set to
+then DiaObject IDs are used for selection, if `source_select` is set to
 `by-fov` then region is used for selection using HTM indexing. `by-oid` is
 likely to be faster for current implementation.
 
 Returned history is supposed limited to `read_sources_months` period (from
 config file), but in current implementation history is not limited.
 
-Returns list of `l1db.DiaSource_full` instances.
+Returns `afw.table` catalog of DiaSource records. Schema of returned catalog
+is determined by database table schema.
 
 
 #### `L1db.getDiaFSources(self, objects, explain=False)`
 
-Retrieves history of the DIAForcedSources matching given DIAObjects.
-`objects` is a list of `DiaObject` (or `DiaObject_short`) instances.
+Retrieves history of the DiaForcedSources matching given DiaObjects.
+`objects` is a catalog of `DiaObject` records (only `id` field needs to
+be defined).
 
-Returned history is supposed limited to `read_forced_sources_months` period
-(from config file), but in current implementation history is not limited.
+Returned history is supposed to be limited to `read_forced_sources_months`
+period (from config file), but in current implementation history is not
+limited.
 
-Returns list of `l1db.DiaForcedSource` instances.
+Returns `afw.table` catalog of DiaForcedSource records. Schema of returned
+catalog is determined by database table schema.
 
 
 ### Saving new data to a database
@@ -175,33 +208,21 @@ type.
 
 #### `L1db.storeDiaObjects(self, objects, dt, explain=False)`
 
-Stores DIAObjects from current visit. `objects` is a list of `l1db.DiaObject`
-instances. `dt` is the visit time, an instance of Python `datetime.datetime`
+Stores DiaObjects from current visit. `objects` is a catalog of DiaObject
+records. `dt` is the visit time, an instance of Python `datetime.datetime`
 type.
 
 
 #### `L1db.storeDiaSources(self, sources, explain=False)`
 
-Stores DIASources from current visit. `objects` is a list of `l1db.DiaSource`
-instances.
+Stores DiaSources from current visit. `objects` is a catalog of DiaSource
+record.
 
 
 #### `L1db.storeDiaForcedSources(self, sources, explain=False)`
 
-Stores DIAForcedSources from current visit. `objects` is a list of
-`l1db.DiaForcedSource` instances.
-
-
-### Other methods
-
-#### `L1db.makeSchema(self, drop=False)`
-
-Creates all necessary tbles for the L1DB schema based on configuration
-parameters (from config file). If `drop` is True then removes all tables
-from database first.
-
-This method should be called once before all other operations to prepare
-L1DB database.
+Stores DiaForcedSources from current visit. `objects` is a catalog of
+DiaForcedSource records.
 
 
 ## Applications
@@ -222,7 +243,10 @@ This is likely not reusable for anything else.
 
 Takes a configuration file as a parameter and creates (or re-creates) L1DB
 schema in the database. This is a command line wrapper for `L1db.makeSchema`
-method, and it should be run once to initialize L1DB.
+method, and it should be run once to initialize L1DB. This script creates
+standard schema (as defined in config files derived from `cat` schema).
+For alternative schemas one can either update YAML config files or create a
+copy of this script which passes `afw.table` schemas to `makeSchema()`.
 
 
 ### gen_sources
@@ -240,5 +264,4 @@ used by iPython notebooks to produce confusing plots.
 ### parse_cat
 
 Parses SQL schema files from `cat` package and dumps schema in a format that
-can be pasted into L1db class. (This process should be automated later,
-L1DB schema will be generated from `cat` directly).
+is usable by `L1db` class (YAML schema file in `data/l1db-schema.yaml`).

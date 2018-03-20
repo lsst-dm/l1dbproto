@@ -1,5 +1,7 @@
+setupRequired(afw)
 setupRequired(db)
 setupRequired(python)
+setupRequired(pyyaml)
 setupRequired(scons)
 setupRequired(sconsUtils)
 setupRequired(sphgeom)
