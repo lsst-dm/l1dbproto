@@ -1,8 +1,7 @@
-# Extra columns for L1DB schema that do not appear in cat schema but
-# are necessary for implementation purposes. Definitions in this file
-# override column definition in standard schema.
-# Special indices for DiaObject table re defined as special tables here
-# but have no columns.
+# Extra schema definitions compared to `cat` schema used by L1DB implementation.
+
+# DiaObject needs a special column for time of last seen DiaSource,
+# validityEnd should be allowed to have NULL (for +Infinity)
 table: DiaObject
 columns:
 - name: lastNonForcedSource
@@ -14,24 +13,29 @@ columns:
   nullable: true
   description: Time when validity of this diaObject ends.
   default: null
+
 ---
+# DiaObjectLast uses the same columns as DiaObject but has different index
 table: DiaObjectLast
 indices:
 - name: PK_DiaObjectLast
   columns:
-  - htmId20
+  - pixelId
   - diaObjectId
   type: PRIMARY
 - name: IDX_DiaObjectLast_diaObjectId
   columns:
   - diaObjectId
   type: INDEX
+
 ---
+# Special PK index for DiaObject table with spacial column being first
+# (should provide better locality)
 table: DiaObjectIndexHtmFirst
 indices:
 - name: PK_DiaObject
   columns:
-  - htmId20
+  - pixelId
   - diaObjectId
   - validityStart
   type: PRIMARY

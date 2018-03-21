@@ -501,7 +501,7 @@ columns:
   default: '0'
   description: Flags, bitwise OR tbd.
   ucd: meta.code
-- name: htmId20
+- name: pixelId
   type: BIGINT
   nullable: false
   description: HTM index.
@@ -517,7 +517,7 @@ indices:
   type: INDEX
 - name: IDX_DiaObject_htmId20
   columns:
-  - htmId20
+  - pixelId
   type: INDEX
 ---
 table: SSObject
@@ -1548,7 +1548,7 @@ columns:
   default: '0'
   description: Flags, bitwise OR tbd.
   ucd: meta.code
-- name: htmId20
+- name: pixelId
   type: BIGINT
   nullable: false
   description: HTM index.
@@ -1571,7 +1571,7 @@ indices:
   type: INDEX
 - name: IDX_DiaSource_htmId20
   columns:
-  - htmId20
+  - pixelId
   type: INDEX
 ---
 table: DiaForcedSource

@@ -81,6 +81,29 @@ def _visitTimes(start_time, interval_sec, count):
             count -= 1
         dt += delta
 
+
+def _htm_indices(region):
+    """Generate a set of HTM indices covering specified field of view.
+
+    Parameters
+    ----------
+    region: `sphgeom.Region`
+        Region that needs to be indexed
+
+    Returns
+    -------
+    Sequence of ranges, range is a tuple (minHtmID, maxHtmID).
+    """
+
+    _LOG.debug('region: %s', region)
+    pixelator = HtmPixelization(constants.HTM_LEVEL)
+    indices = pixelator.envelope(region, constants.HTM_MAX_RANGES)
+    for irange in indices.ranges():
+        _LOG.debug('range: %s %s', pixelator.toString(irange[0]),
+                   pixelator.toString(irange[1]))
+
+    return indices.ranges()
+
 # def _utc_seconds(dt):
 #     """Convert datetime to POSIX seconds
 #     """
@@ -117,8 +140,6 @@ class APProto(object):
                             help='Interval between visits in seconds, def: 45')
         parser.add_argument('-c', '--config', default="l1db.cfg", metavar='PATH',
                             help='Name of the database config file, def: l1db.cfg')
-        parser.add_argument('-e', '--explain', default=False, action='store_true',
-                            help='Run queries with EXPLAIN')
         parser.add_argument('-U', '--no-update', default=False, action='store_true',
                             help='DO not update database, only reading is performed.')
         parser.add_argument('--start-time', type=_timeParse, default=None,
@@ -309,9 +330,12 @@ class APProto(object):
 
         with timer.Timer(name+"Objects-read"):
 
+            # determine indices that we need
+            ranges = _htm_indices(region)
+
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(region, explain=self.args.explain)
+            latest_objects = db.getDiaObjects(ranges)
             _LOG.info(name+'database found %s objects', len(latest_objects))
 
             # filter database obects to a mask
@@ -334,10 +358,11 @@ class APProto(object):
 
         with timer.Timer(name+"Source-read"):
 
-            read_srcs = db.getDiaSources(region, latest_objects, explain=self.args.explain)
+            latest_objects_ids = [obj['id'] for obj in latest_objects]
+            read_srcs = db.getDiaSources(latest_objects_ids)
             _LOG.info(name+'database found %s sources', len(read_srcs))
 
-            read_srcs = db.getDiaForcedSources(latest_objects, explain=self.args.explain)
+            read_srcs = db.getDiaForcedSources(latest_objects_ids)
             _LOG.info(name+'database found %s forced sources', len(read_srcs))
 
         if not self.args.no_update:
@@ -347,17 +372,17 @@ class APProto(object):
                 # store new versions of objects
                 _LOG.info(name+'will store %d Objects', len(objects))
                 if objects:
-                    db.storeDiaObjects(objects, dt, explain=self.args.explain)
+                    db.storeDiaObjects(objects, dt)
 
                 # store all sources
                 _LOG.info(name+'will store %d Sources', len(srcs))
                 if srcs:
-                    db.storeDiaSources(srcs, explain=self.args.explain)
+                    db.storeDiaSources(srcs)
 
                 # store all forced sources
                 _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
                 if fsrcs:
-                    db.storeDiaForcedSources(fsrcs, explain=self.args.explain)
+                    db.storeDiaForcedSources(fsrcs)
 
     def _filterDiaObjects(self, latest_objects, region):
         """Filter out objects from a catalog which are outside region.
@@ -401,7 +426,7 @@ class APProto(object):
         # schema.addField("validityStart", "L")
         # schema.addField("validityEnd", "L")
         # schema.addField("lastNonForcedSource", "L")
-        schema.addField("htmId20", "L", doc="HTM index")
+        schema.addField("indexer_id", "L", doc="HTM index")
 
         return schema
 
@@ -454,7 +479,7 @@ class APProto(object):
             # record.set("lastNonForcedSource", _utc_seconds(dt))
             record.set("coord_ra", ra)
             record.set("coord_dec", decl)
-            record.set("htmId20", index)
+            record.set("indexer_id", index)
 
         _LOG.info('found %s matching objects and %s transients/noise', len(catalog) - n_trans, n_trans)
 
@@ -492,7 +517,7 @@ class APProto(object):
             # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
             record.set("coord_ra", obj["coord_ra"])
             record.set("coord_dec", obj["coord_dec"])
-            record.set("htmId20", obj["htmId20"])
+            record.set("indexer_id", obj["indexer_id"])
 
     def _makeDiaSourceSchema(self):
         """Make afw.table schema for DiaSource.
@@ -513,7 +538,7 @@ class APProto(object):
         schema.addField("ccdVisitId", "L")
         schema.addField("parent", "L")
         schema.addField("flags", "L")
-        schema.addField("htmId20", "L", doc="HTM index")
+        schema.addField("indexer_id", "L", doc="HTM index")
 
         return schema
 
@@ -561,7 +586,7 @@ class APProto(object):
             record.set("coord_ra", ra)
             record.set("coord_dec", decl)
             record.set("flags", 0)
-            record.set("htmId20", index)
+            record.set("indexer_id", index)
 
         return catalog
 
