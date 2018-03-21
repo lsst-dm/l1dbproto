@@ -306,6 +306,23 @@ class L1dbSchema(object):
             cmap[afw_name] = column
         return cmap
 
+    def getColumnMap(self, table_name):
+        """Returns mapping of column names to Column definitions.
+
+        Parameters
+        ----------
+        table_name : `str`
+            One of known L1DB table names.
+
+        Returns
+        -------
+        `dict` with column names as keys and `ColumnDef` instances as
+        values.
+        """
+        table = self._schemas[table_name]
+        cmap = {column.name: column for column in table.columns}
+        return cmap
+
     def _buildSchemas(self, schema_file, extra_schema_file, afw_schemas):
         """Create schema definitions for all tables.
 
@@ -499,6 +516,10 @@ class L1dbSchema(object):
         elif self._engine.name == 'postgresql':
             from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION
             return DOUBLE_PRECISION
+        elif self._engine.name == 'sqlite':
+            # all floats in sqlite are 8-byte
+            from sqlalchemy.dialects.sqlite import REAL
+            return REAL
         else:
             raise TypeError('cannot determine DOUBLE type, unexpected dialect: ' + self._engine.name)
 

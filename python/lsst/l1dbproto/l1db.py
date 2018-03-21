@@ -140,11 +140,14 @@ class L1db(object):
         with open(config) as cfgFile:
             parser.read_file(cfgFile, config)
 
+        # logging.getLogger('sqlalchemy').setLevel(logging.INFO)
+
         # engine is reused between multiple processes, make sure that we don't
         # share connections by disabling pool (by using NullPool class)
         options = dict(parser.items("database"))
+        isolation_level = options.get('isolation_level', 'READ_COMMITTED')
         self._engine = sqlalchemy.create_engine(options['url'], poolclass=NullPool,
-                                                isolation_level='READ_COMMITTED')
+                                                isolation_level=isolation_level)
 
         # get all parameters from config file
         try:
@@ -212,6 +215,8 @@ class L1db(object):
 
             visitId = row[0]
             visitTime = row[1]
+            _LOG.info("lastVisit: visitId: %s visitTime: %s (%s)", visitId,
+                      visitTime, type(visitTime))
 
             # get max IDs from corresponding tables
             stmnt = sql.select([sql.func.max(self._schema.objects.c.diaObjectId)])
@@ -284,20 +289,18 @@ class L1db(object):
         `afw.table.BaseCatalog` instance
         """
 
-        query = "SELECT "
-
         # decide what columns we need
         if self._dia_object_index == 'last_object_table':
             table = self._schema.objects_last
         else:
             table = self._schema.objects
         if self._read_full_objects:
-            query += "*"
+            query = table.select()
         else:
-            columns = ["diaObjectId", "lastNonForcedSource", "ra", "decl",
-                       "raSigma", "declSigma", "ra_decl_Cov", "htmId20"]
-            query += ','.join(['"' + col + '"' for col in columns])
-        query += ' FROM "' + table.name + '" WHERE ('
+            columns = [table.c.diaObjectId, table.c.lastNonForcedSource,
+                       table.c.ra, table.c.decl, table.c.raSigma, table.c.declSigma,
+                       table.c.ra_decl_Cov, table.c.htmId20]
+            query = sql.select(columns)
 
         # determine indices that we need
         ranges = _htm_indices(region)
@@ -307,15 +310,14 @@ class L1db(object):
         for low, upper in ranges:
             upper -= 1
             if low == upper:
-                exprlist.append('"htmId20" = ' + str(low))
+                exprlist.append(table.c.htmId20 == low)
             else:
-                exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, upper))
-        query += ' OR '.join(exprlist)
-        query += ')'
+                exprlist.append(sql.expression.between(table.c.htmId20, low, upper))
+        query = query.where(sql.expression.or_(*exprlist))
 
         # select latest version of objects
         if self._dia_object_index != 'last_object_table':
-            query += ' AND "validityEnd" IS NULL'
+            query = query.where(table.c.validityEnd == None)
 
         _LOG.debug("query: %s", query)
 
@@ -325,9 +327,9 @@ class L1db(object):
 
         # execute select
         with Timer('DiaObject select'):
-            with _ansi_session(self._engine) as conn:
-                res = conn.execute(sql.text(query))
-        objects = self._convertResult(res, "DiaObject")
+            with self._engine.begin() as conn:
+                res = conn.execute(query)
+                objects = self._convertResult(res, "DiaObject")
         _LOG.debug("found %s DiaObjects", len(objects))
         return objects
 
@@ -392,7 +394,7 @@ class L1db(object):
         with Timer('DiaSource select'):
             with _ansi_session(self._engine) as conn:
                 res = conn.execute(sql.text(query))
-        sources = self._convertResult(res, "DiaSource")
+                sources = self._convertResult(res, "DiaSource")
         _LOG.debug("found %s DiaSources", len(sources))
         return sources
 
@@ -438,7 +440,7 @@ class L1db(object):
         with Timer('DiaForcedSource select'):
             with _ansi_session(self._engine) as conn:
                 res = conn.execute(sql.text(query))
-        sources = self._convertResult(res, "DiaForcedSource")
+                sources = self._convertResult(res, "DiaForcedSource")
         _LOG.debug("found %s DiaForcedSources", len(sources))
         return sources
 
@@ -471,6 +473,10 @@ class L1db(object):
 
         ids = sorted([obj['id'] for obj in objs])
         _LOG.info("first object ID: %d", ids[0])
+
+        # NOTE: workaround for sqlite, need this here to avoid
+        # "database is locked" error.
+        table = self._schema.objects
 
         # everything to be done in single transaction
         with _ansi_session(self._engine) as conn:
@@ -594,15 +600,16 @@ class L1db(object):
         """
 
         # move data from DiaObjectNightly into DiaObject
-        with _ansi_session(self._engine) as conn:
-            query = 'INSERT INTO "' + self._schema.objects.name + '" '
-            query += 'SELECT * FROM "' + self._schema.objects_nightly.name + '"'
-            with Timer('DiaObjectNightly copy'):
-                conn.execute(sql.text(query))
+        if self._dia_object_nightly:
+            with _ansi_session(self._engine) as conn:
+                query = 'INSERT INTO "' + self._schema.objects.name + '" '
+                query += 'SELECT * FROM "' + self._schema.objects_nightly.name + '"'
+                with Timer('DiaObjectNightly copy'):
+                    conn.execute(sql.text(query))
 
-            query = 'DELETE FROM "' + self._schema.objects_nightly.name + '"'
-            with Timer('DiaObjectNightly delete'):
-                conn.execute(sql.text(query))
+                query = 'DELETE FROM "' + self._schema.objects_nightly.name + '"'
+                with Timer('DiaObjectNightly delete'):
+                    conn.execute(sql.text(query))
 
         if self._engine.name == 'postgresql':
 
@@ -696,7 +703,7 @@ class L1db(object):
         extra_fields = (extra_columns or {}).keys()
         extra_fields = [field for field in extra_fields if field not in fields]
 
-        if replace and conn.engine.name == 'mysql':
+        if replace and conn.engine.name in ('mysql', 'sqlite'):
             query = 'REPLACE INTO'
         else:
             query = 'INSERT INTO'
@@ -762,6 +769,7 @@ class L1db(object):
             record = catalog.addNew()
             for col, value in row.items():
                 if isinstance(value, datetime):
+                    # convert datetime to number of seconds
                     value = int((value - datetime.utcfromtimestamp(0)).total_seconds())
                 if value is not None:
                     record.set(col_map[col], value)
