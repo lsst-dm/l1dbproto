@@ -15,11 +15,10 @@ from configparser import ConfigParser, NoSectionError
 # Imports for other modules --
 #-----------------------------
 import lsst.afw.table as afwTable
-from lsst import sphgeom
 import sqlalchemy
 from sqlalchemy import (func, sql)
 from sqlalchemy.pool import NullPool
-from . import constants, timer, l1dbschema
+from . import timer, l1dbschema
 
 #----------------------------------
 # Local non-exported definitions --
@@ -83,25 +82,6 @@ class Timer(object):
 # Information about single visit
 Visit = namedtuple('Visit', 'visitId visitTime lastObjectId lastSourceId')
 
-def _htm_indices(region):
-    """
-    Generate a set of HTM indices covering specified field of view.
-
-    Retuns sequence of ranges, range is a tuple (minHtmID, maxHtmID).
-
-    @param region: sphgeom Region instance
-    """
-
-    _LOG.debug('circle: %s', region)
-    pixelator = sphgeom.HtmPixelization(constants.HTM_LEVEL)
-    indices = pixelator.envelope(region, constants.HTM_MAX_RANGES)
-    for irange in indices.ranges():
-        _LOG.debug('range: %s %s', pixelator.toString(irange[0]),
-                   pixelator.toString(irange[1]))
-
-    return indices.ranges()
-
-
 @contextmanager
 def _ansi_session(engine):
     """Returns a connection, makes sure that ANSI mode is set for MySQL
@@ -159,16 +139,14 @@ class L1db(object):
         self._months_sources = int(options.get('read_sources_months', 0))
         self._months_fsources = int(options.get('read_forced_sources_months', 0))
         self._read_full_objects = bool(int(options.get('read_full_objects', 0)))
-        self._source_select = options.get('source_select', "by-fov")
         self._object_last_replace = bool(int(options.get('object_last_replace', 0)))
+        self._do_explain = bool(int(options.get('explain', 0)))
         schema_file = options.get('schema_file')
         extra_schema_file = options.get('extra_schema_file')
         column_map = options.get('column_map')
 
         if self._dia_object_index not in ('baseline', 'htm20_id_iov', 'last_object_table'):
             raise ValueError('unexpected dia_object_index value: ' + str(self._dia_object_index))
-        if self._source_select not in ('by-fov', 'by-oid'):
-            raise ValueError('unexpected source_select value: ' + self._source_select)
 
         self._schema = l1dbschema.L1dbSchema(engine=self._engine,
                                              dia_object_index=self._dia_object_index,
@@ -184,7 +162,6 @@ class L1db(object):
         _LOG.info("    read_sources_months: %s", self._months_sources)
         _LOG.info("    read_forced_sources_months: %s", self._months_fsources)
         _LOG.info("    read_full_objects: %s", self._read_full_objects)
-        _LOG.info("    source_select: %s", self._source_select)
         _LOG.info("    object_last_replace: %s", self._object_last_replace)
         _LOG.info("    schema_file: %s", schema_file)
         _LOG.info("    extra_schema_file: %s", extra_schema_file)
@@ -263,26 +240,26 @@ class L1db(object):
 
         return res
 
-    def getDiaObjects(self, region, explain=False):
+    def getDiaObjects(self, pixel_ranges):
         """Returns catalog of DiaObject instances from given region.
 
-        Returns only the last version of the the DiaObject. Object are
-        searched based on HTM index. Returned catalog contains objects
-        outside given region, further filtering should be applied to
-        restrict returned result set.
+        Objects are searched based on pixelization index and region is
+        determined by the set of indices. There is no assumption on a
+        particular type of index, client is responsible for consistency
+        when calculating pixelization indices.
 
         This methods returns `afw.table` catalog with schema determined by
         the schema of L1 database table. Re-mapping of the column names is
         done for some columns (based on column map passed to constructor)
         but types or units are not changed.
 
+        Returns only the last version of the the DiaObject.
+
         Parameters
         ----------
-        region: `sphgeom.Region`
-            Sky region, can be FOV or single CCD.
-        explain: `boolean`
-            If true then also run database query with EXPLAIN, may be
-            useful for understanding query performance.
+        pixel_ranges: `list` of `tuple`
+            Sequence of ranges, range is a tuple (minPixelID, maxPixelID).
+            This defines set of pixel indices to be included in result.
 
         Returns
         -------
@@ -299,20 +276,17 @@ class L1db(object):
         else:
             columns = [table.c.diaObjectId, table.c.lastNonForcedSource,
                        table.c.ra, table.c.decl, table.c.raSigma, table.c.declSigma,
-                       table.c.ra_decl_Cov, table.c.htmId20]
+                       table.c.ra_decl_Cov, table.c.pixelId]
             query = sql.select(columns)
-
-        # determine indices that we need
-        ranges = _htm_indices(region)
 
         # build selection
         exprlist = []
-        for low, upper in ranges:
+        for low, upper in pixel_ranges:
             upper -= 1
             if low == upper:
-                exprlist.append(table.c.htmId20 == low)
+                exprlist.append(table.c.pixelId == low)
             else:
-                exprlist.append(sql.expression.between(table.c.htmId20, low, upper))
+                exprlist.append(sql.expression.between(table.c.pixelId, low, upper))
         query = query.where(sql.expression.or_(*exprlist))
 
         # select latest version of objects
@@ -321,7 +295,7 @@ class L1db(object):
 
         _LOG.debug("query: %s", query)
 
-        if explain:
+        if self._do_explain:
             # run the same query with explain
             self._explain(query, self._engine)
 
@@ -333,12 +307,13 @@ class L1db(object):
         _LOG.debug("found %s DiaObjects", len(objects))
         return objects
 
-    def getDiaSources(self, region, objects, explain=False):
-        """Returns catalog of DiaSource instances from given region or
-        matching given DiaObjects.
+    def getDiaSourcesInRegion(self, pixel_ranges, objects):
+        """Returns catalog of DiaSource instances from given region.
 
-        Depending on configuration this method can chose to do spatial
-        query based on HTM index or select based on DiaObject IDs.
+        Sources are searched based on pixelization index and region is
+        determined by the set of indices. There is no assumption on a
+        particular type of index, client is responsible for consistency
+        when calculating pixelization indices.
 
         This methods returns `afw.table` catalog with schema determined by
         the schema of L1 database table. Re-mapping of the column names is
@@ -347,13 +322,9 @@ class L1db(object):
 
         Parameters
         ----------
-        region: `sphgeom.Region`
-            Sky region, can be FOV or single CCD.
-        objects : `afw.table.BaseCatalog`
-            Catalog of DiaObject records
-        explain: bool
-            If true then also run database query with EXPLAIN, may be
-            useful for understanding query performance.
+        pixel_ranges: `list` of `tuple`
+            Sequence of ranges, range is a tuple (minPixelID, maxPixelID).
+            This defines set of pixel indices to be included in result.
 
         Returns
         -------
@@ -364,31 +335,18 @@ class L1db(object):
             _LOG.info("Skip DiaSources fetching")
             return []
 
-        if not objects:
-            _LOG.info("Skip DiaSources fetching - no Objects")
-            return []
-
         table = self._schema.sources
         query = 'SELECT *  FROM "' + table.name + '" WHERE '
 
-        if self._source_select == 'by-fov':
-            # determine indices that we need
-            ranges = _htm_indices(region)
-
-            # build selection
-            exprlist = []
-            for low, upper in ranges:
-                upper -= 1
-                if low == upper:
-                    exprlist.append('"htmId20" = ' + str(low))
-                else:
-                    exprlist.append('"htmId20" BETWEEN {} AND {}'.format(low, upper))
-            query += '(' + ' OR '.join(exprlist) + ')'
-        else:
-            # select by object id
-            ids = sorted([obj['id'] for obj in objects])
-            ids = ",".join(str(id) for id in ids)
-            query += '"diaObjectId" IN (' + ids + ') '
+        # build selection
+        exprlist = []
+        for low, upper in pixel_ranges:
+            upper -= 1
+            if low == upper:
+                exprlist.append('"pixelId" = ' + str(low))
+            else:
+                exprlist.append('"pixelId" BETWEEN {} AND {}'.format(low, upper))
+        query += '(' + ' OR '.join(exprlist) + ')'
 
         # execute select
         with Timer('DiaSource select'):
@@ -398,7 +356,49 @@ class L1db(object):
         _LOG.debug("found %s DiaSources", len(sources))
         return sources
 
-    def getDiaForcedSources(self, objects, explain=False):
+    def getDiaSources(self, object_ids):
+        """Returns catalog of DiaSource instances given set of DiaObject IDs.
+
+        This methods returns `afw.table` catalog with schema determined by
+        the schema of L1 database table. Re-mapping of the column names is
+        done for some columns (based on column map passed to constructor)
+        but types or units are not changed.
+
+        Parameters
+        ----------
+        object_ids :
+            Collection of DiaObject IDs
+
+        Returns
+        -------
+        `afw.table.BaseCatalog` instance
+        """
+
+        if self._months_sources == 0:
+            _LOG.info("Skip DiaSources fetching")
+            return []
+
+        if not object_ids:
+            _LOG.info("Skip DiaSources fetching - no Objects")
+            return []
+
+        table = self._schema.sources
+        query = 'SELECT *  FROM "' + table.name + '" WHERE '
+
+        # select by object id
+        ids = sorted(object_ids)
+        ids = ",".join(str(id) for id in ids)
+        query += '"diaObjectId" IN (' + ids + ') '
+
+        # execute select
+        with Timer('DiaSource select'):
+            with _ansi_session(self._engine) as conn:
+                res = conn.execute(sql.text(query))
+                sources = self._convertResult(res, "DiaSource")
+        _LOG.debug("found %s DiaSources", len(sources))
+        return sources
+
+    def getDiaForcedSources(self, object_ids):
         """Returns catalog of DiaForceSource instances matching given
         DiaObjects.
 
@@ -409,11 +409,8 @@ class L1db(object):
 
         Parameters
         ----------
-        objects : `afw.table.BaseCatalog`
-            Catalog of DiaObject records.
-        explain: bool
-            If true then also run database query with EXPLAIN, may be
-            useful for understanding query performance.
+        object_ids :
+            Collection of DiaObject IDs
 
         Returns
         -------
@@ -424,7 +421,7 @@ class L1db(object):
             _LOG.info("Skip DiaForceSources fetching")
             return []
 
-        if not objects:
+        if not object_ids:
             _LOG.info("Skip DiaForceSources fetching - no Objects")
             return []
 
@@ -432,7 +429,7 @@ class L1db(object):
         query = 'SELECT *  FROM "' + table.name + '" WHERE '
 
         # select by object id
-        ids = sorted([obj["id"] for obj in objects])
+        ids = sorted(object_ids)
         ids = ",".join(str(id) for id in ids)
         query += '"diaObjectId" IN (' + ids + ') '
 
@@ -444,7 +441,7 @@ class L1db(object):
         _LOG.debug("found %s DiaForcedSources", len(sources))
         return sources
 
-    def storeDiaObjects(self, objs, dt, explain=False):
+    def storeDiaObjects(self, objs, dt):
         """Store catalog of DiaObjects from current visit.
 
         This methods takes `afw.table` catalog, its schema must be
@@ -466,9 +463,6 @@ class L1db(object):
             Catalog with DiaObject records
         dt : `datetime.datetime`
             Time of the visit
-        explain : bool
-            If true then also run database query with EXPLAIN, may be
-            useful for understanding query performance.
         """
 
         ids = sorted([obj['id'] for obj in objs])
@@ -493,7 +487,7 @@ class L1db(object):
                     query = 'DELETE FROM "' + table.name + '" '
                     query += 'WHERE "diaObjectId" IN (' + ids + ') '
 
-                    if explain:
+                    if self._do_explain:
                         # run the same query with explain
                         self._explain(query, conn)
 
@@ -504,7 +498,7 @@ class L1db(object):
                 extra_columns = dict(lastNonForcedSource=dt, validityStart=dt,
                                      validityEnd=None)
                 self._storeObjectsAfw(objs, conn, table, "DiaObject",
-                                      explain=explain, replace=do_replace,
+                                      replace=do_replace,
                                       extra_columns=extra_columns)
 
             else:
@@ -518,7 +512,7 @@ class L1db(object):
 
                 # _LOG.debug("query: %s", query)
 
-                if explain:
+                if self._do_explain:
                     # run the same query with explain
                     self._explain(query, conn)
 
@@ -534,9 +528,9 @@ class L1db(object):
             extra_columns = dict(lastNonForcedSource=dt, validityStart=dt,
                                  validityEnd=None)
             self._storeObjectsAfw(objs, conn, table, "DiaObject",
-                                  explain=explain, extra_columns=extra_columns)
+                                  extra_columns=extra_columns)
 
-    def storeDiaSources(self, sources, explain=False):
+    def storeDiaSources(self, sources):
         """Store catalog of DIASources from current visit.
 
         This methods takes `afw.table` catalog, its schema must be
@@ -553,18 +547,15 @@ class L1db(object):
         ----------
         sources : `afw.table.BaseCatalog`
             Catalog containing DiaSource records
-        explain : bool
-            If true then also run database query with EXPLAIN, may be
-            useful for understanding query performance.
         """
 
         # everything to be done in single transaction
         with _ansi_session(self._engine) as conn:
 
             table = self._schema.sources
-            self._storeObjectsAfw(sources, conn, table, "DiaSource", explain)
+            self._storeObjectsAfw(sources, conn, table, "DiaSource")
 
-    def storeDiaForcedSources(self, sources, explain=False):
+    def storeDiaForcedSources(self, sources):
         """Store a set of DIAForcedSources from current visit.
 
         This methods takes `afw.table` catalog, its schema must be
@@ -581,16 +572,13 @@ class L1db(object):
         ----------
         sources : `afw.table.BaseCatalog`
             Catalog containing DiaForcedSource records
-        explain : bool
-            If true then also run database query with EXPLAIN, may be
-            useful for understanding query performance.
         """
 
         # everything to be done in single transaction
         with _ansi_session(self._engine) as conn:
 
             table = self._schema.forcedSources
-            self._storeObjectsAfw(sources, conn, table, "DiaForcedSource", explain)
+            self._storeObjectsAfw(sources, conn, table, "DiaForcedSource")
 
     def dailyJob(self):
         """Implement daily activities like cleanup/vacuum.
@@ -653,7 +641,7 @@ class L1db(object):
             _LOG.info("EXPLAIN returned nothing")
 
     def _storeObjectsAfw(self, objects, conn, table, schema_table_name,
-                         explain=False, replace=False, extra_columns=None):
+                         replace=False, extra_columns=None):
         """Generic store method.
 
         Takes catalog of records and stores a bunch of objects in a table.
@@ -668,8 +656,6 @@ class L1db(object):
             Database table
         schema_table_name : `str`
             Name of the table to be used for finding table schema.
-        explain : `boolean`
-            If `True` then do EXPLAIN on INSERT query
         replace : `boolean`
             If `True` then use replace instead of INSERT (should be more efficient)
         extra_columns : `dict`, optional
@@ -722,7 +708,7 @@ class L1db(object):
                 row.append(quoteValue(extra_columns[field]))
             values.append('(' + ','.join(row) + ')')
 
-        if explain:
+        if self._do_explain:
             # run the same query with explain, only give it one row of data
             self._explain(query + values[0], conn)
 
@@ -730,7 +716,7 @@ class L1db(object):
 
         if replace and conn.engine.name == 'postgresql':
             # This depends on that "replace" can only be true for DiaObjectLast table
-            pks = ('htmId20', 'diaObjectId')
+            pks = ('pixelId', 'diaObjectId')
             query += " ON CONFLICT (\"{}\", \"{}\") DO UPDATE SET ".format(*pks)
             fields = [column_map[field].name for field in afw_fields]
             fields = ['"{0}" = EXCLUDED."{0}"'.format(field)
