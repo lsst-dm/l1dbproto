@@ -83,8 +83,8 @@ def main():
     parser.add_argument('--drop', action='store_true', default=False,
                         help='Drop existing schema first, this will delete '
                         'all data in the tables, use with extreme caution')
-    parser.add_argument('-c', '--config', default="l1db.cfg",
-                        help='Name of the config file, def: l1db.cfg')
+    parser.add_argument('-c', '--config', default=None, metavar='PATH',
+                        help='Name of the database config file (pex.config)')
     parser.add_argument('-a', '--association', default=False,
                         action='store_true',
                         help='Use afw.table schema from ap_association')
@@ -93,13 +93,17 @@ def main():
     # configure logging
     _configLogger(args.verbose)
 
+    config = l1db.L1dbConfig()
+    if args.config:
+        config.load(args.config)
+
     afw_schemas = None
     if args.association:
         afw_schemas = dict(DiaObject=make_minimal_dia_object_schema(),
                            DiaSource=make_minimal_dia_source_schema())
 
     # instantiate db interface
-    db = l1db.L1db(config=args.config, afw_schemas=afw_schemas)
+    db = l1db.L1db(config=config, afw_schemas=afw_schemas)
 
     # do it
     db.makeSchema(drop=args.drop)

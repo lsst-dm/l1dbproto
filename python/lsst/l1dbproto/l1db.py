@@ -9,12 +9,14 @@ from collections import namedtuple
 from contextlib import contextmanager
 from datetime import datetime
 import logging
-from configparser import ConfigParser, NoSectionError
+import os
 
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
 import lsst.afw.table as afwTable
+import lsst.pex.config as pexConfig
+from lsst.pex.config import Field, ChoiceField, ListField
 import sqlalchemy
 from sqlalchemy import (func, sql)
 from sqlalchemy.pool import NullPool
@@ -39,8 +41,10 @@ class Timer(object):
 
     See also :py:mod:`timer` module.
     """
-    def __init__(self, name, log_before_cursor_execute=False):
+
+    def __init__(self, name, do_logging=True, log_before_cursor_execute=False):
         self._log_before_cursor_execute = log_before_cursor_execute
+        self._do_logging = do_logging
         self._timer1 = timer.Timer(name)
         self._timer2 = timer.Timer(name + " (before/after cursor)")
 
@@ -59,7 +63,8 @@ class Timer(object):
         """
         if exc_type is None:
             self._timer1.stop()
-            self._timer1.dump()
+            if self._do_logging:
+                self._timer1.dump()
 #         event.remove(engine.Engine, "before_cursor_execute", self._start_timer)
 #         event.remove(engine.Engine, "after_cursor_execute", self._stop_timer)
         return False
@@ -73,7 +78,8 @@ class Timer(object):
     def _stop_timer(self, conn, cursor, statement, parameters, context, executemany):
         """Stop counting"""
         self._timer2.stop()
-        self._timer2.dump()
+        if self._do_logging:
+            self._timer2.dump()
 
 #------------------------
 # Exported definitions --
@@ -92,9 +98,63 @@ def _ansi_session(engine):
         yield conn
     return
 
+
+def _data_file_name(basename):
+    """Return path name of a data file.
+    """
+    return os.path.join(os.environ.get("L1DBPROTO_DIR"), "data", basename)
+
 #---------------------
 #  Class definition --
 #---------------------
+
+
+class L1dbConfig(pexConfig.Config):
+
+    db_url = Field(dtype=str, doc="SQLAlchemy database connection URI")
+    isolation_level = ChoiceField(dtype=str,
+                                  doc="Transaction isolation level",
+                                  allowed={"READ_COMMITTED": "Read committed",
+                                           "READ_UNCOMMITTED": "Read uncommitted",
+                                           "REPEATABLE_READ": "Repeatable read",
+                                           "SERIALIZABLE": "Serializable"},
+                                  default="READ_COMMITTED")
+    dia_object_index = ChoiceField(dtype=str,
+                                   doc="Indexing mode for DiaObject table",
+                                   allowed={'baseline': "Index defined in baseline schema",
+                                            'pix_id_iov': "(pixelId, objectId, iovStart) PK",
+                                            'last_object_table': "Separate DiaObjectLast table"},
+                                   default='baseline')
+    dia_object_nightly = Field(dtype=bool,
+                               doc="Use separate nightly table for DiaObject",
+                               default=False)
+    read_sources_months = Field(dtype=int,
+                                doc="Number of months of history to read from DiaSource",
+                                default=0)
+    read_forced_sources_months = Field(dtype=int,
+                                       doc="Number of months of history to read from DiaForcedSource",
+                                       default=0)
+    dia_object_columns = ListField(dtype=str,
+                                   doc="List of columns to read from DiaObject, by default read all columns",
+                                   default=[])
+    object_last_replace = Field(dtype=bool,
+                                doc="If True (default) then use \"upsert\" for DiaObjectsLast table",
+                                default=True)
+    schema_file = Field(dtype=str,
+                        doc="Location of (YAML) configuration file with standard schema",
+                        default=_data_file_name("l1db-schema.yaml"))
+    extra_schema_file = Field(dtype=str,
+                              doc="Location of (YAML) configuration file with extra schema",
+                              default=_data_file_name("l1db-schema-extra.yaml"))
+    column_map = Field(dtype=str,
+                       doc="Location of (YAML) configuration file with column mapping",
+                       default=_data_file_name("l1db-afw-map.yaml"))
+    explain = Field(dtype=bool,
+                    doc="If True then run EXPLAIN SQL command on each executed query",
+                    default=False)
+    timer = Field(dtype=bool,
+                  doc="If True then print/log timing information",
+                  default=False)
 
 
 class L1db(object):
@@ -106,8 +166,7 @@ class L1db(object):
 
     Parameters
     ----------
-    config : str
-        Name of the configuration file.
+    config : `L1dbConfig`
     afw_schemas : `dict`, optional
         Dictionary with table name for a key and `afw.table.Schema`
         for a value. Columns in schema will be added to standard
@@ -116,55 +175,33 @@ class L1db(object):
 
     def __init__(self, config, afw_schemas=None):
 
-        parser = ConfigParser()
-        with open(config) as cfgFile:
-            parser.read_file(cfgFile, config)
+        self.config = config
 
         # logging.getLogger('sqlalchemy').setLevel(logging.INFO)
+        _LOG.info("L1DB Configuration:")
+        _LOG.info("    dia_object_index: %s", self.config.dia_object_index)
+        _LOG.info("    dia_object_nightly: %s", self.config.dia_object_nightly)
+        _LOG.info("    read_sources_months: %s", self.config.read_sources_months)
+        _LOG.info("    read_forced_sources_months: %s", self.config.read_forced_sources_months)
+        _LOG.info("    dia_object_columns: %s", self.config.dia_object_columns)
+        _LOG.info("    object_last_replace: %s", self.config.object_last_replace)
+        _LOG.info("    schema_file: %s", self.config.schema_file)
+        _LOG.info("    extra_schema_file: %s", self.config.extra_schema_file)
+        _LOG.info("    column_map: %s", self.config.column_map)
 
         # engine is reused between multiple processes, make sure that we don't
         # share connections by disabling pool (by using NullPool class)
-        options = dict(parser.items("database"))
-        isolation_level = options.get('isolation_level', 'READ_COMMITTED')
-        self._engine = sqlalchemy.create_engine(options['url'], poolclass=NullPool,
-                                                isolation_level=isolation_level)
-
-        # get all parameters from config file
-        try:
-            options = dict(parser.items("l1db"))
-        except NoSectionError:
-            options = {}
-        self._dia_object_index = options.get('dia_object_index', 'baseline')
-        self._dia_object_nightly = bool(int(options.get('dia_object_nightly', 0)))
-        self._months_sources = int(options.get('read_sources_months', 0))
-        self._months_fsources = int(options.get('read_forced_sources_months', 0))
-        self._read_full_objects = bool(int(options.get('read_full_objects', 0)))
-        self._object_last_replace = bool(int(options.get('object_last_replace', 0)))
-        self._do_explain = bool(int(options.get('explain', 0)))
-        schema_file = options.get('schema_file')
-        extra_schema_file = options.get('extra_schema_file')
-        column_map = options.get('column_map')
-
-        if self._dia_object_index not in ('baseline', 'htm20_id_iov', 'last_object_table'):
-            raise ValueError('unexpected dia_object_index value: ' + str(self._dia_object_index))
+        self._engine = sqlalchemy.create_engine(self.config.db_url,
+                                                poolclass=NullPool,
+                                                isolation_level=self.config.isolation_level)
 
         self._schema = l1dbschema.L1dbSchema(engine=self._engine,
-                                             dia_object_index=self._dia_object_index,
-                                             dia_object_nightly=self._dia_object_nightly,
-                                             schema_file=schema_file,
-                                             extra_schema_file=extra_schema_file,
-                                             column_map=column_map,
+                                             dia_object_index=self.config.dia_object_index,
+                                             dia_object_nightly=self.config.dia_object_nightly,
+                                             schema_file=self.config.schema_file,
+                                             extra_schema_file=self.config.extra_schema_file,
+                                             column_map=self.config.column_map,
                                              afw_schemas=afw_schemas)
-
-        _LOG.info("L1DB Configuration:")
-        _LOG.info("    dia_object_index: %s", self._dia_object_index)
-        _LOG.info("    dia_object_nightly: %s", self._dia_object_nightly)
-        _LOG.info("    read_sources_months: %s", self._months_sources)
-        _LOG.info("    read_forced_sources_months: %s", self._months_fsources)
-        _LOG.info("    read_full_objects: %s", self._read_full_objects)
-        _LOG.info("    object_last_replace: %s", self._object_last_replace)
-        _LOG.info("    schema_file: %s", schema_file)
-        _LOG.info("    extra_schema_file: %s", extra_schema_file)
 
     #-------------------
     #  Public methods --
@@ -231,7 +268,7 @@ class L1db(object):
         """
         res = {}
         tables = [self._schema.objects, self._schema.sources, self._schema.forcedSources]
-        if self._dia_object_index == 'last_object_table':
+        if self.config.dia_object_index == 'last_object_table':
             tables.append(self._schema.objects_last)
         for table in tables:
             stmt = sql.select([func.count()]).select_from(table)
@@ -267,16 +304,14 @@ class L1db(object):
         """
 
         # decide what columns we need
-        if self._dia_object_index == 'last_object_table':
+        if self.config.dia_object_index == 'last_object_table':
             table = self._schema.objects_last
         else:
             table = self._schema.objects
-        if self._read_full_objects:
+        if not self.config.dia_object_columns:
             query = table.select()
         else:
-            columns = [table.c.diaObjectId, table.c.lastNonForcedSource,
-                       table.c.ra, table.c.decl, table.c.raSigma, table.c.declSigma,
-                       table.c.ra_decl_Cov, table.c.pixelId]
+            columns = [table.c[col] for col in self.config.dia_object_columns]
             query = sql.select(columns)
 
         # build selection
@@ -290,24 +325,24 @@ class L1db(object):
         query = query.where(sql.expression.or_(*exprlist))
 
         # select latest version of objects
-        if self._dia_object_index != 'last_object_table':
+        if self.config.dia_object_index != 'last_object_table':
             query = query.where(table.c.validityEnd == None)
 
         _LOG.debug("query: %s", query)
 
-        if self._do_explain:
+        if self.config.explain:
             # run the same query with explain
             self._explain(query, self._engine)
 
         # execute select
-        with Timer('DiaObject select'):
+        with Timer('DiaObject select', self.config.timer):
             with self._engine.begin() as conn:
                 res = conn.execute(query)
                 objects = self._convertResult(res, "DiaObject")
         _LOG.debug("found %s DiaObjects", len(objects))
         return objects
 
-    def getDiaSourcesInRegion(self, pixel_ranges, objects):
+    def getDiaSourcesInRegion(self, pixel_ranges):
         """Returns catalog of DiaSource instances from given region.
 
         Sources are searched based on pixelization index and region is
@@ -331,7 +366,7 @@ class L1db(object):
         `afw.table.BaseCatalog` instance
         """
 
-        if self._months_sources == 0:
+        if self.config.read_sources_months == 0:
             _LOG.info("Skip DiaSources fetching")
             return []
 
@@ -349,7 +384,7 @@ class L1db(object):
         query += '(' + ' OR '.join(exprlist) + ')'
 
         # execute select
-        with Timer('DiaSource select'):
+        with Timer('DiaSource select', self.config.timer):
             with _ansi_session(self._engine) as conn:
                 res = conn.execute(sql.text(query))
                 sources = self._convertResult(res, "DiaSource")
@@ -374,7 +409,7 @@ class L1db(object):
         `afw.table.BaseCatalog` instance
         """
 
-        if self._months_sources == 0:
+        if self.config.read_sources_months == 0:
             _LOG.info("Skip DiaSources fetching")
             return []
 
@@ -391,7 +426,7 @@ class L1db(object):
         query += '"diaObjectId" IN (' + ids + ') '
 
         # execute select
-        with Timer('DiaSource select'):
+        with Timer('DiaSource select', self.config.timer):
             with _ansi_session(self._engine) as conn:
                 res = conn.execute(sql.text(query))
                 sources = self._convertResult(res, "DiaSource")
@@ -417,7 +452,7 @@ class L1db(object):
         `afw.table.BaseCatalog` instance
         """
 
-        if self._months_fsources == 0:
+        if self.config.read_forced_sources_months == 0:
             _LOG.info("Skip DiaForceSources fetching")
             return []
 
@@ -434,7 +469,7 @@ class L1db(object):
         query += '"diaObjectId" IN (' + ids + ') '
 
         # execute select
-        with Timer('DiaForcedSource select'):
+        with Timer('DiaForcedSource select', self.config.timer):
             with _ansi_session(self._engine) as conn:
                 res = conn.execute(sql.text(query))
                 sources = self._convertResult(res, "DiaForcedSource")
@@ -466,7 +501,7 @@ class L1db(object):
         """
 
         ids = sorted([obj['id'] for obj in objs])
-        _LOG.info("first object ID: %d", ids[0])
+        _LOG.debug("first object ID: %d", ids[0])
 
         # NOTE: workaround for sqlite, need this here to avoid
         # "database is locked" error.
@@ -477,21 +512,21 @@ class L1db(object):
 
             ids = ",".join(str(id) for id in ids)
 
-            if self._dia_object_index == 'last_object_table':
+            if self.config.dia_object_index == 'last_object_table':
 
                 # insert and replace all records in LAST table, mysql and postgres have
                 # non-standard features (handled in _storeObjectsAfw)
                 table = self._schema.objects_last
-                do_replace = self._object_last_replace
+                do_replace = self.config.object_last_replace
                 if not do_replace:
                     query = 'DELETE FROM "' + table.name + '" '
                     query += 'WHERE "diaObjectId" IN (' + ids + ') '
 
-                    if self._do_explain:
+                    if self.config.explain:
                         # run the same query with explain
                         self._explain(query, conn)
 
-                    with Timer(table.name + ' delete'):
+                    with Timer(table.name + ' delete', self.config.timer):
                         res = conn.execute(sql.text(query))
                     _LOG.debug("deleted %s objects", res.rowcount)
 
@@ -512,16 +547,16 @@ class L1db(object):
 
                 # _LOG.debug("query: %s", query)
 
-                if self._do_explain:
+                if self.config.explain:
                     # run the same query with explain
                     self._explain(query, conn)
 
-                with Timer(table.name + ' truncate'):
+                with Timer(table.name + ' truncate', self.config.timer):
                     res = conn.execute(sql.text(query))
                 _LOG.debug("truncated %s intervals", res.rowcount)
 
             # insert new versions
-            if self._dia_object_nightly:
+            if self.config.dia_object_nightly:
                 table = self._schema.objects_nightly
             else:
                 table = self._schema.objects
@@ -588,15 +623,15 @@ class L1db(object):
         """
 
         # move data from DiaObjectNightly into DiaObject
-        if self._dia_object_nightly:
+        if self.config.dia_object_nightly:
             with _ansi_session(self._engine) as conn:
                 query = 'INSERT INTO "' + self._schema.objects.name + '" '
                 query += 'SELECT * FROM "' + self._schema.objects_nightly.name + '"'
-                with Timer('DiaObjectNightly copy'):
+                with Timer('DiaObjectNightly copy', self.config.timer):
                     conn.execute(sql.text(query))
 
                 query = 'DELETE FROM "' + self._schema.objects_nightly.name + '"'
-                with Timer('DiaObjectNightly delete'):
+                with Timer('DiaObjectNightly delete', self.config.timer):
                     conn.execute(sql.text(query))
 
         if self._engine.name == 'postgresql':
@@ -708,7 +743,7 @@ class L1db(object):
                 row.append(quoteValue(extra_columns[field]))
             values.append('(' + ','.join(row) + ')')
 
-        if self._do_explain:
+        if self.config.explain:
             # run the same query with explain, only give it one row of data
             self._explain(query + values[0], conn)
 
@@ -725,7 +760,7 @@ class L1db(object):
 
         # _LOG.debug("query: %s", query)
         _LOG.info("%s: will store %d records", table.name, len(objects))
-        with Timer(table.name + ' insert'):
+        with Timer(table.name + ' insert', self.config.timer):
             res = conn.execute(sql.text(query))
         _LOG.debug("inserted %s intervals", res.rowcount)
 
@@ -754,10 +789,13 @@ class L1db(object):
         for row in res:
             record = catalog.addNew()
             for col, value in row.items():
-                if isinstance(value, datetime):
-                    # convert datetime to number of seconds
-                    value = int((value - datetime.utcfromtimestamp(0)).total_seconds())
-                if value is not None:
-                    record.set(col_map[col], value)
+                # some columns may exist in database but not included in afw schema
+                col = col_map.get(col)
+                if col is not None:
+                    if isinstance(value, datetime):
+                        # convert datetime to number of seconds
+                        value = int((value - datetime.utcfromtimestamp(0)).total_seconds())
+                    if value is not None:
+                        record.set(col, value)
 
         return catalog

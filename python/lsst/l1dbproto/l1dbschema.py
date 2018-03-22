@@ -6,7 +6,6 @@
 #--------------------------------
 from collections import namedtuple
 import logging
-import os
 import yaml
 
 #-----------------------------
@@ -48,11 +47,6 @@ IndexDef = namedtuple('IndexDef', 'name type columns')
 #    indices : list of IndexDef instances, can be empty or None
 TableDef = namedtuple('TableDef', 'name description columns indices')
 
-
-def _data_file_name(basename):
-    """Return path name of a data file.
-    """
-    return os.path.join(os.environ.get("L1DBPROTO_DIR"), "data", basename)
 
 #---------------------
 #  Class definition --
@@ -108,14 +102,6 @@ class L1dbSchema(object):
         self._metadata = MetaData(self._engine)
         self._tables = {}
 
-        # read schema from yaml
-        if not schema_file:
-            schema_file = _data_file_name("l1db-schema.yaml")
-        if not extra_schema_file:
-            extra_schema_file = _data_file_name("l1db-schema-extra.yaml")
-        if not column_map:
-            column_map = _data_file_name("l1db-afw-map.yaml")
-
         _LOG.debug("Reading column map file %s", column_map)
         with open(column_map) as yaml_stream:
             # maps cat column name to afw column name
@@ -153,7 +139,7 @@ class L1dbSchema(object):
             MySQL engine type to use for new tables.
         """
 
-        if self._dia_object_index == 'htm20_id_iov':
+        if self._dia_object_index == 'pix_id_iov':
             # Special PK with HTM column in first position
             constraints = self._tableIndices('DiaObjectIndexHtmFirst')
         else:
@@ -270,16 +256,17 @@ class L1dbSchema(object):
                                       type="Angle",
                                       doc=column.description or "",
                                       units="rad")
+            elif column.type == "BLOB":
+                # No BLOB support for now
+                pass
             else:
                 units = column.unit or ""
-                # nmgy is not recognized as unit, and it is misspelled as ngmy
-                # in cat schema in few places.
-                if "nmgy" in units or "ngmy" in units:
-                    units = ""
+                # some units in schema are not recognized by afw but we do not care
                 key = schema.addField(afw_col,
                                       type=self._afw_type_map_reverse[column.type],
                                       doc=column.description or "",
-                                      units=units)
+                                      units=units,
+                                      parse_strict="silent")
             col2afw[column.name] = key
 
         return schema, col2afw

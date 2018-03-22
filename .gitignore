@@ -4,6 +4,10 @@ config.log
 *.pyc
 *.cfgc
 *.gz
-/*.cfg
+/l1db-*.py
+/test*.py
+/log*
+/var_sources.npy
+/l1db*.db*
 tests/.tests
 python/lsst/l1dbproto/version.py
