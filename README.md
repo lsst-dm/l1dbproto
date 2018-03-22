@@ -68,59 +68,18 @@ degrees, which is different from standard `afw.table` units (rad).
 ### Instantiating L1db
 
 Constructor of `l1db.L1db` takes two arguments:
-- name of the configuration file that defines all relevant parameters
-  (this was done to simplify development during prototyping)
+- instance of `l1db.L1dbConfig` type which is a subclass of `pex.config.Config`
 - optional dictionary mapping table names into `afw.table.Schema` instances
 
-Configuration file contains small number of parameters which determine how to
-connect to database, what kind of schema L1DB has and few other options. There
-are few examples of configuration files in `cfg/` folder, here is a copy of
-configuration used for running recent prototype version against mysql database:
+Configuration type `l1db.L1dbConfig` defines small number of parameters which
+determine how to connect to database, what kind of schema L1DB has and few
+other options. Field documentation strings provide brief description of what
+each parameter does and there are few examples of configuration overrides in
+`cfg/` folder:
 
-```
-#
-# Example config file for L1DB using mysql backend
-#
-
-[database]
-# SQLAlchemy URL for connection
-url = mysql://localhost/l1dbproto?unix_socket=/var/lib/mysql/mysql.sock
-
-[l1db]
-# DiaObject indexing options, possible values:
-#  - baseline: (default) PK = (object ID, validity)
-#  - htm20_id_iov:       PK = (htmId, object ID, validity)
-#  - last_object_table:  as baseline but use separate table
-#                        for last DiaObject version
-dia_object_index = last_object_table
-
-# if set to 1 then define special nightly non-indexed DiaObject table
-# which is merged with actual table every night
-dia_object_nightly = 0
-
-# if non-zero then do "upsert" for DiaObjects which could be more efficient
-object_last_replace = 1
-
-# if set to 0 then DiaSources are not read at all,
-# actual non-zero value is ignored for now (reads all sources)
-read_sources_months = 12
-
-# if set to 0 then DiaForcedSources are not read at all,
-# actual non-zero value is ignored for now (reads all sources)
-read_forced_sources_months = 12
-
-# set to 1 to read complete DiaObject record (all columns)
-read_full_objects = 0
-
-# how to select sources, possible values:
-#  - by-fov: selects Sources using FOV region using HTM index
-#  - by-oid: selects Sources using DiaObject ID
-source_select = by-oid
-```
-
-Second argument is used to pass `afw.table` schemas that client code is using
-for catalogs. Any columns that are not defined in standard DPDD schema but
-appear in second argument will be added to the schema managed by `L1db`.
+Second argument to constructor is used to pass `afw.table` schemas that client
+code is using for catalogs. Any columns that are not defined in standard DPDD
+schema but appear in second argument will be added to the schema managed by `L1db`.
 This needs to be defined consistently when creating schema (with `makeSchema()`
 method) and other data access methods.
 
@@ -128,6 +87,9 @@ Example of instantiating `L1db`:
 
     from lsst.l1dbproto import l1db
 
+    afwObjectSchema = afwTable.Schema()
+    afwSourceSchema = afwTable.Schema()
+    # fill both schemas
     afw_schemas = dict(DiaObject=afwObjectSchema,
                        DiaSource=afwSourceSchema)
     db = l1db.L1db(config, afw_schemas)

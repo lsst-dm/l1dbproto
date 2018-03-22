@@ -138,8 +138,10 @@ class APProto(object):
                             help='Numer of visits to process, def: 1')
         parser.add_argument('-i', '--interval', type=int, default=45, metavar='SECONDS',
                             help='Interval between visits in seconds, def: 45')
-        parser.add_argument('-c', '--config', default="l1db.cfg", metavar='PATH',
-                            help='Name of the database config file, def: l1db.cfg')
+        parser.add_argument('-c', '--config', default=None, metavar='PATH',
+                            help='Name of the database config file (pex.config)')
+        parser.add_argument('-d', '--dump-config', default=False, action="store_true",
+                            help='Dump configuration to standard output and quit.')
         parser.add_argument('-U', '--no-update', default=False, action='store_true',
                             help='DO not update database, only reading is performed.')
         parser.add_argument('--start-time', type=_timeParse, default=None,
@@ -163,8 +165,16 @@ class APProto(object):
         """Run whole shebang.
         """
 
+        config = l1db.L1dbConfig()
+        if self.args.config:
+            config.load(self.args.config)
+
+        if self.args.dump_config:
+            config.saveToStream(sys.stdout)
+            return 0
+
         # instantiate db interface
-        db = l1db.L1db(self.args.config)
+        db = l1db.L1db(config)
 
         # Initialize starting values from database visits table
         last_visit = db.lastVisit()

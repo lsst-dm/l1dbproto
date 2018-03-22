@@ -1,5 +1,6 @@
 setupRequired(afw)
 setupRequired(db)
+setupRequired(pex_config)
 setupRequired(python)
 setupRequired(pyyaml)
 setupRequired(scons)
