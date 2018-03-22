@@ -369,10 +369,10 @@ class APProto(object):
         with timer.Timer(name+"Source-read"):
 
             latest_objects_ids = [obj['id'] for obj in latest_objects]
-            read_srcs = db.getDiaSources(latest_objects_ids)
+            read_srcs = db.getDiaSources(latest_objects_ids, dt)
             _LOG.info(name+'database found %s sources', len(read_srcs))
 
-            read_srcs = db.getDiaForcedSources(latest_objects_ids)
+            read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
             _LOG.info(name+'database found %s forced sources', len(read_srcs))
 
         if not self.args.no_update:

@@ -342,7 +342,7 @@ class L1db(object):
         _LOG.debug("found %s DiaObjects", len(objects))
         return objects
 
-    def getDiaSourcesInRegion(self, pixel_ranges):
+    def getDiaSourcesInRegion(self, pixel_ranges, dt):
         """Returns catalog of DiaSource instances from given region.
 
         Sources are searched based on pixelization index and region is
@@ -391,7 +391,7 @@ class L1db(object):
         _LOG.debug("found %s DiaSources", len(sources))
         return sources
 
-    def getDiaSources(self, object_ids):
+    def getDiaSources(self, object_ids, dt):
         """Returns catalog of DiaSource instances given set of DiaObject IDs.
 
         This methods returns `afw.table` catalog with schema determined by
@@ -403,6 +403,8 @@ class L1db(object):
         ----------
         object_ids :
             Collection of DiaObject IDs
+        dt : `datetime.datetime`
+            Time of the current visit
 
         Returns
         -------
@@ -433,7 +435,7 @@ class L1db(object):
         _LOG.debug("found %s DiaSources", len(sources))
         return sources
 
-    def getDiaForcedSources(self, object_ids):
+    def getDiaForcedSources(self, object_ids, dt):
         """Returns catalog of DiaForceSource instances matching given
         DiaObjects.
 
@@ -446,6 +448,8 @@ class L1db(object):
         ----------
         object_ids :
             Collection of DiaObject IDs
+        dt : `datetime.datetime`
+            Time of the current visit
 
         Returns
         -------

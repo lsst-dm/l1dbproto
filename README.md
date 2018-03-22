@@ -115,47 +115,39 @@ There are three methods in `L1db`, each is responsible for reading data of one
 type.
 
 
-#### `L1db.getDiaObjects(self, region, explain=False)`
+#### `L1db.getDiaObjects(self, pixel_ranges)`
 
-Retrieves most recent version of each DiaObject from specified region or
-near it. `region` is an instance of `sphgeom.Region` type. DiaObject search
-is based on HTM index and returned set can also include records outside
-specified region, so some filtering will be needed on client side.
+Retrieves most recent version of each DiaObject from specified region. Objects
+are searched based on pixelization index and region is determined by the set of
+index ranges. `pixel_ranges` is a sequence of tuples where each tuple defines
+a single range of index IDs in regular Python convention `[low, high)`.
 
-Returns `afw.table` catalog of DiaObject instances. If `read_full_objects`
-(in `l1db` section) is set to zero in config file returned catalog will only
-include a small set of columns, otherwise all columns in database table will
-be returned in a catalog schema.
+Returns `afw.table` catalog of DiaObject instances. By default all columns in
+database table will be returned in a catalog schema, one cause `dia_object_columns`
+configuration field to limit the list of columns queried.
 
 
-#### `L1db.getDiaSources(self, region, objects, explain=False)`
+#### `L1db.getDiaSources(self, object_ids, dt)`
 
-Retrieves history of the DiaSources from a given region matching given
-DiaObjects. `region` is an instance of `sphgeom.Region` type, `objects` is
-a catalog of `DiaObject` records (only `id` field of `DiaObject` is used
-so schema can be anything as long as `id` field is defined).
+Retrieves history of the DiaSources matching given DiaObjects. `object_ids`
+is a list (or any container) of the matching DiaObjects IDs. `dt` is the
+`datetime` of the current visit.
 
-One of `region` or `objects` can be ignored when selecting records from
-database. Currently if `source_select` config parameter is set to `by-oid`
-then DiaObject IDs are used for selection, if `source_select` is set to
-`by-fov` then region is used for selection using HTM indexing. `by-oid` is
-likely to be faster for current implementation.
-
-Returned history is supposed limited to `read_sources_months` period (from
-config file), but in current implementation history is not limited.
+Returned history is supposed to be limited to `read_sources_months` period
+(from config object), but in current implementation history is not limited.
 
 Returns `afw.table` catalog of DiaSource records. Schema of returned catalog
 is determined by database table schema.
 
 
-#### `L1db.getDiaFSources(self, objects, explain=False)`
+#### `L1db.getDiaForcedSources(self, object_ids, dt)`
 
 Retrieves history of the DiaForcedSources matching given DiaObjects.
-`objects` is a catalog of `DiaObject` records (only `id` field needs to
-be defined).
+`object_ids` is a list (or any container) of the matching DiaObjects IDs.
+`dt` is the `datetime` of the current visit.
 
 Returned history is supposed to be limited to `read_forced_sources_months`
-period (from config file), but in current implementation history is not
+period (from config object), but in current implementation history is not
 limited.
 
 Returns `afw.table` catalog of DiaForcedSource records. Schema of returned
@@ -168,22 +160,22 @@ There are three methods in `L1db`, each is responsible for storing data of one
 type.
 
 
-#### `L1db.storeDiaObjects(self, objects, dt, explain=False)`
+#### `L1db.storeDiaObjects(self, objects, dt)`
 
 Stores DiaObjects from current visit. `objects` is a catalog of DiaObject
 records. `dt` is the visit time, an instance of Python `datetime.datetime`
 type.
 
 
-#### `L1db.storeDiaSources(self, sources, explain=False)`
+#### `L1db.storeDiaSources(self, sources)`
 
-Stores DiaSources from current visit. `objects` is a catalog of DiaSource
+Stores DiaSources from current visit. `sources` is a catalog of DiaSource
 record.
 
 
-#### `L1db.storeDiaForcedSources(self, sources, explain=False)`
+#### `L1db.storeDiaForcedSources(self, sources)`
 
-Stores DiaForcedSources from current visit. `objects` is a catalog of
+Stores DiaForcedSources from current visit. `sources` is a catalog of
 DiaForcedSource records.
 
 
@@ -208,7 +200,7 @@ schema in the database. This is a command line wrapper for `L1db.makeSchema`
 method, and it should be run once to initialize L1DB. This script creates
 standard schema (as defined in config files derived from `cat` schema).
 For alternative schemas one can either update YAML config files or create a
-copy of this script which passes `afw.table` schemas to `makeSchema()`.
+copy of this script which passes `afw.table` schemas to `L1db` constructor.
 
 
 ### gen_sources
