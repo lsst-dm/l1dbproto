@@ -48,6 +48,48 @@ IndexDef = namedtuple('IndexDef', 'name type columns')
 TableDef = namedtuple('TableDef', 'name description columns indices')
 
 
+def make_minimal_dia_object_schema():
+    """Define and create the minimal schema required for a DIAObject.
+
+    Return
+    ------
+    schema : `lsst.afw.table.Schema`
+        Minimal schema for DIAObjects.
+    """
+    schema = afwTable.SourceTable.makeMinimalSchema()
+    schema.addField("pixelId", type='L',
+                    doc='Unique spherical pixelization identifier.')
+    schema.addField("nDiaSources", type='L')
+    return schema
+
+
+def make_minimal_dia_source_schema():
+    """ Define and create the minimal schema required for a DIASource.
+
+    Return
+    ------
+    schema : `lsst.afw.table.Schema`
+        Minimal schema for DIASources.
+    """
+    schema = afwTable.SourceTable.makeMinimalSchema()
+    schema.addField("diaObjectId", type='L',
+                    doc='Unique identifier of the DIAObject this source is '
+                        'associated to.')
+    schema.addField("ccdVisitId", type='L',
+                    doc='Id of the exposure and ccd this object was detected '
+                        'in.')
+    schema.addField("psFlux", type='D',
+                    doc='Calibrated PSF flux of this source.')
+    schema.addField("psFluxErr", type='D',
+                    doc='Calibrated PSF flux err of this source.')
+    schema.addField("flags", type='L',
+                    doc='Quality flags for this DIASource.')
+    schema.addField("pixelId", type='L',
+                    doc='Unique spherical pixelization identifier.')
+    return schema
+
+
+
 #---------------------
 #  Class definition --
 #---------------------
@@ -84,12 +126,14 @@ class L1dbSchema(object):
                          L="BIGINT",
                          F="FLOAT",
                          D="DOUBLE",
-                         Angle="DOUBLE")
+                         Angle="DOUBLE",
+                         String="CHAR")
     _afw_type_map_reverse = dict(INT="I",
                                  BIGINT="L",
                                  FLOAT="F",
                                  DOUBLE="D",
-                                 DATETIME="L")
+                                 DATETIME="L",
+                                 CHAR="String")
 
     def __init__(self, engine, dia_object_index, dia_object_nightly,
                  schema_file=None, extra_schema_file=None, column_map=None,
@@ -242,15 +286,18 @@ class L1dbSchema(object):
 
         # make a schema
         col2afw = {}
-        schema = afwTable.Schema()
+        schema = afwTable.SourceTable.makeMinimalSchema()
         for column in table.columns:
             if columns and column.name not in columns:
                 continue
             afw_col = col_map.get(column.name, column.name)
-            #
-            # NOTE: degree to radian conversion is not supported (yet)
-            #
-            if False and column.type in ("DOUBLE", "FLOAT") and column.unit == "deg":
+            if afw_col in schema.getNames():
+                # Continue if the column is already in the minimal schema.
+                key = schema.find(afw_col).getKey()
+            elif column.type in ("DOUBLE", "FLOAT") and column.unit == "deg":
+                #
+                # NOTE: degree to radian conversion is not supported (yet)
+                #
                 # angles in afw are radians and have special "Angle" type
                 key = schema.addField(afw_col,
                                       type="Angle",
@@ -262,11 +309,24 @@ class L1dbSchema(object):
             else:
                 units = column.unit or ""
                 # some units in schema are not recognized by afw but we do not care
-                key = schema.addField(afw_col,
-                                      type=self._afw_type_map_reverse[column.type],
-                                      doc=column.description or "",
-                                      units=units,
-                                      parse_strict="silent")
+                if self._afw_type_map_reverse[column.type] == 'String':
+                    key = schema.addField(afw_col,
+                                          type=self._afw_type_map_reverse[column.type],
+                                          doc=column.description or "",
+                                          units=units,
+                                          parse_strict="silent",
+                                          size=10)
+                elif units == "deg":
+                    key = schema.addField(afw_col,
+                                          type='Angle',
+                                          doc=column.description or "",
+                                          parse_strict="silent")
+                else:
+                    key = schema.addField(afw_col,
+                                          type=self._afw_type_map_reverse[column.type],
+                                          doc=column.description or "",
+                                          units=units,
+                                          parse_strict="silent")
             col2afw[column.name] = key
 
         return schema, col2afw

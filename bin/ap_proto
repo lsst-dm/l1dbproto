@@ -23,7 +23,9 @@ import time
 #-----------------------------
 import numpy
 import lsst.afw.table as afwTable
-from lsst.l1dbproto import constants, DIA, generators, geom, l1db, timer
+from lsst.geom import SpherePoint
+from lsst.l1dbproto import \
+    constants, DIA, generators, geom, l1db, l1dbschema, timer
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
 #---------------------
@@ -412,7 +414,7 @@ class APProto(object):
         for i, obj in enumerate(latest_objects):
             # TODO: For now we use L1DB units (degrees), will have to be changed
             # in case we adopt afw units.
-            lonLat = LonLat.fromDegrees(float(obj['coord_ra']), float(obj['coord_dec']))
+            lonLat = LonLat.fromRadians(obj['coord_ra'].asRadians(), obj['coord_dec'].asRadians())
             dir_obj = UnitVector3d(lonLat)
             mask[i] = region.contains(dir_obj)
 
@@ -424,20 +426,7 @@ class APProto(object):
         Schema should be compatible with L1DB schema and it should contain
         all fields that have no default values in the schema.
         """
-        schema = afwTable.Schema()
-        schema.addField("id", "L", doc="unique ID")
-        # TODO: in regular afw.table this should be "Angle" with units="rad",
-        # but l1db does not know about all conversions yet
-        schema.addField("coord_ra", "D", doc="position in ra/dec", units="deg")
-        schema.addField("coord_dec", "D", doc="position in ra/dec", units="deg")
-
-        # L1DB-specific stuff, current implementation knows how to fill
-        # time-related columns
-        # schema.addField("validityStart", "L")
-        # schema.addField("validityEnd", "L")
-        # schema.addField("lastNonForcedSource", "L")
-        schema.addField("indexer_id", "L", doc="HTM index")
-
+        schema = l1dbschema.make_minimal_dia_object_schema()
         return schema
 
     def _makeDiaObjects(self, sources, indices, dt):
@@ -463,7 +452,7 @@ class APProto(object):
         """
 
         schema = self._makeDiaObjectSchema()
-        catalog = afwTable.BaseCatalog(schema)
+        catalog = afwTable.SourceCatalog(schema)
         n_trans = 0
         for i in range(len(sources)):
 
@@ -476,8 +465,8 @@ class APProto(object):
                 n_trans += 1
 
             v3d = Vector3d(xyz[0], xyz[1], xyz[2])
-            ra = LonLat.longitudeOf(v3d).asDegrees()
-            decl = LonLat.latitudeOf(v3d).asDegrees()
+            sp = SpherePoint(v3d)
+
             dir_v = UnitVector3d(v3d)
             pixelator = HtmPixelization(constants.HTM_LEVEL)
             index = pixelator.index(dir_v)
@@ -487,9 +476,9 @@ class APProto(object):
             # record.set("validityStart", _utc_seconds(dt))
             # record.set("validityEnd", 0)
             # record.set("lastNonForcedSource", _utc_seconds(dt))
-            record.set("coord_ra", ra)
-            record.set("coord_dec", decl)
-            record.set("indexer_id", index)
+            record.set("coord_ra", sp.getRa())
+            record.set("coord_dec", sp.getDec())
+            record.set("pixelId", index)
 
         _LOG.info('found %s matching objects and %s transients/noise', len(catalog) - n_trans, n_trans)
 
@@ -527,7 +516,7 @@ class APProto(object):
             # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
             record.set("coord_ra", obj["coord_ra"])
             record.set("coord_dec", obj["coord_dec"])
-            record.set("indexer_id", obj["indexer_id"])
+            record.set("pixelId", obj["pixelId"])
 
     def _makeDiaSourceSchema(self):
         """Make afw.table schema for DiaSource.
@@ -535,21 +524,7 @@ class APProto(object):
         Schema should be compatible with L1DB schema and it should contain
         all fields that have no default values in the schema.
         """
-        schema = afwTable.Schema()
-        schema.addField("id", "L", doc="unique ID")
-        # TODO: in regular afw.table this should be "Angle" with units="rad",
-        # but l1db does not know about all conversions yet
-        schema.addField("coord_ra", "D", doc="position in ra/dec", units="deg")
-        schema.addField("coord_dec", "D", doc="position in ra/dec", units="deg")
-
-        # L1DB-specific stuff
-        schema.addField("diaObjectId", "L")
-        schema.addField("ssObjectId", "L")
-        schema.addField("ccdVisitId", "L")
-        schema.addField("parent", "L")
-        schema.addField("flags", "L")
-        schema.addField("indexer_id", "L", doc="HTM index")
-
+        schema = l1dbschema.make_minimal_dia_source_schema()
         return schema
 
     def _makeDiaSources(self, sources, indices, visit_id):
@@ -580,8 +555,8 @@ class APProto(object):
 
             xyz = sources[i]
             v3d = Vector3d(xyz[0], xyz[1], xyz[2])
-            ra = LonLat.longitudeOf(v3d).asDegrees()
-            decl = LonLat.latitudeOf(v3d).asDegrees()
+            sp = SpherePoint(v3d)
+
             dir_v = UnitVector3d(v3d)
             pixelator = HtmPixelization(constants.HTM_LEVEL)
             index = pixelator.index(dir_v)
@@ -593,10 +568,10 @@ class APProto(object):
             record.set("ccdVisitId", visit_id)
             record.set("diaObjectId", var_idx)
             record.set("parent", 0)
-            record.set("coord_ra", ra)
-            record.set("coord_dec", decl)
+            record.set("coord_ra", sp.getRa())
+            record.set("coord_dec", sp.getDec())
             record.set("flags", 0)
-            record.set("indexer_id", index)
+            record.set("pixelId", index)
 
         return catalog
 

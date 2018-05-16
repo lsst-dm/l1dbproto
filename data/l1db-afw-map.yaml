@@ -7,11 +7,11 @@ DiaObject:
   diaObjectId: id
   ra: coord_ra
   decl: coord_dec
-  pixelId: indexer_id
+  pixelId: pixelId
 
 DiaSource:
   diaSourceId: id
   parentDiaSourceId: parent
   ra: coord_ra
   decl: coord_dec
-  pixelId: indexer_id
+  pixelId: pixelId
