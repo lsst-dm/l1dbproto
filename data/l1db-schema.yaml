@@ -1654,11 +1654,11 @@ columns:
   description: Natural log of the probability that the observed diaObject is the same
     as the nearby object.
 indices:
-- name: IDX_DiaObjectToObjectMatch_diaObjectId
+- name: IDX_DiaO2OMatch_diaObjectId
   columns:
   - diaObjectId
   type: INDEX
-- name: IDX_DiaObjectToObjectMatch_objectId
+- name: IDX_DiaO2OMatch_objectId
   columns:
   - objectId
   type: INDEX

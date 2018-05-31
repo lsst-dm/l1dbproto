@@ -191,9 +191,13 @@ class L1db(object):
 
         # engine is reused between multiple processes, make sure that we don't
         # share connections by disabling pool (by using NullPool class)
-        self._engine = sqlalchemy.create_engine(self.config.db_url,
-                                                poolclass=NullPool,
-                                                isolation_level=self.config.isolation_level)
+        if self.config.isolation_level is not None:
+            self._engine = sqlalchemy.create_engine(self.config.db_url,
+                                                    poolclass=NullPool,
+                                                    isolation_level=self.config.isolation_level)
+        else:
+            self._engine = sqlalchemy.create_engine(self.config.db_url,
+                                                    poolclass=NullPool)
 
         self._schema = l1dbschema.L1dbSchema(engine=self._engine,
                                              dia_object_index=self.config.dia_object_index,
@@ -702,12 +706,14 @@ class L1db(object):
             to every row, only if column is missing in catalog records.
         """
 
-        def quoteValue(v):
+        def quoteValue(v, engine=None):
             """Quote and escape values"""
             if v is None:
                 v = "NULL"
             elif isinstance(v, datetime):
                 v = "'" + str(v) + "'"
+                if engine == 'oracle':
+                    v = "TIMESTAMP " + v
             elif isinstance(v, str):
                 # we don't expect nasty stuff in strings
                 v = "'" + v + "'"
@@ -716,13 +722,21 @@ class L1db(object):
                 v = str(v)
             return v
 
+        def quoteColumn(columnName):
+            """Smart quoting for column names.
+            Lower-case naems are not quoted (Oracle backend needs them unquoted).
+            """
+            if not columnName.islower():
+                columnName = '"' + columnName + '"'
+            return columnName
+
         schema = objects.getSchema()
         afw_fields = [field.getName() for key, field in schema]
 
         column_map = self._schema.getAfwColumns(schema_table_name)
 
         # list of columns (as in cat schema)
-        fields = ['"' + column_map[field].name + '"' for field in afw_fields]
+        fields = [column_map[field].name for field in afw_fields]
 
         # use extra columns that are not in fields already
         extra_fields = (extra_columns or {}).keys()
@@ -732,7 +746,10 @@ class L1db(object):
             query = 'REPLACE INTO'
         else:
             query = 'INSERT INTO'
-        query += ' "' + table.name + '" (' + ','.join(fields + extra_fields) + ') VALUES '
+        qfields = [quoteColumn(field) for field in fields + extra_fields]
+        query += ' "' + table.name + '" (' + ','.join(qfields) + ') '
+        if conn.engine.name != 'oracle':
+            query += 'VALUES '
 
         values = []
         for rec in objects:
@@ -742,16 +759,22 @@ class L1db(object):
                 if column_map[field].type == "DATETIME":
                     # convert seconds into datetime
                     value = datetime.utcfromtimestamp(value)
-                row.append(quoteValue(value))
+                row.append(quoteValue(value, conn.engine.name))
             for field in extra_fields:
-                row.append(quoteValue(extra_columns[field]))
-            values.append('(' + ','.join(row) + ')')
+                row.append(quoteValue(extra_columns[field], conn.engine.name))
+            if conn.engine.name != 'oracle':
+                values.append('(' + ','.join(row) + ')')
+            else:
+                values.append('SELECT ' + ','.join(row) + ' FROM DUAL')
 
         if self.config.explain:
             # run the same query with explain, only give it one row of data
             self._explain(query + values[0], conn)
 
-        query += ','.join(values)
+        if conn.engine.name != 'oracle':
+            query += ','.join(values)
+        else:
+            query += ' UNION ALL '.join(values)
 
         if replace and conn.engine.name == 'postgresql':
             # This depends on that "replace" can only be true for DiaObjectLast table
