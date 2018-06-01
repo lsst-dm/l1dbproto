@@ -503,6 +503,9 @@ class L1dbSchema(object):
         elif self._engine.name == 'postgresql':
             from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION
             return DOUBLE_PRECISION
+        elif self._engine.name == 'oracle':
+            from sqlalchemy.dialects.oracle import DOUBLE_PRECISION
+            return DOUBLE_PRECISION
         elif self._engine.name == 'sqlite':
             # all floats in sqlite are 8-byte
             from sqlalchemy.dialects.sqlite import REAL

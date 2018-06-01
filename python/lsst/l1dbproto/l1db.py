@@ -81,6 +81,14 @@ class Timer(object):
         if self._do_logging:
             self._timer2.dump()
 
+
+def _split(seq, nItems):
+    """Split a sequence into smaller sequences"""
+    seq = list(seq)
+    while seq:
+        yield seq[:nItems]
+        del seq[:nItems]
+
 #------------------------
 # Exported definitions --
 #------------------------
@@ -191,9 +199,13 @@ class L1db(object):
 
         # engine is reused between multiple processes, make sure that we don't
         # share connections by disabling pool (by using NullPool class)
-        self._engine = sqlalchemy.create_engine(self.config.db_url,
-                                                poolclass=NullPool,
-                                                isolation_level=self.config.isolation_level)
+        if self.config.isolation_level is not None:
+            self._engine = sqlalchemy.create_engine(self.config.db_url,
+                                                    poolclass=NullPool,
+                                                    isolation_level=self.config.isolation_level)
+        else:
+            self._engine = sqlalchemy.create_engine(self.config.db_url,
+                                                    poolclass=NullPool)
 
         self._schema = l1dbschema.L1dbSchema(engine=self._engine,
                                              dia_object_index=self.config.dia_object_index,
@@ -411,6 +423,7 @@ class L1db(object):
         `afw.table.BaseCatalog` instance
         """
 
+
         if self.config.read_sources_months == 0:
             _LOG.info("Skip DiaSources fetching")
             return []
@@ -420,18 +433,20 @@ class L1db(object):
             return []
 
         table = self._schema.sources
-        query = 'SELECT *  FROM "' + table.name + '" WHERE '
-
-        # select by object id
-        ids = sorted(object_ids)
-        ids = ",".join(str(id) for id in ids)
-        query += '"diaObjectId" IN (' + ids + ') '
-
-        # execute select
+        sources = None
         with Timer('DiaSource select', self.config.timer):
             with _ansi_session(self._engine) as conn:
-                res = conn.execute(sql.text(query))
-                sources = self._convertResult(res, "DiaSource")
+                for ids in _split(sorted(object_ids), 1000):
+                    query = 'SELECT *  FROM "' + table.name + '" WHERE '
+
+                    # select by object id
+                    ids = ",".join(str(id) for id in ids)
+                    query += '"diaObjectId" IN (' + ids + ') '
+
+                    # execute select
+                    res = conn.execute(sql.text(query))
+                    sources = self._convertResult(res, "DiaSource", sources)
+
         _LOG.debug("found %s DiaSources", len(sources))
         return sources
 
@@ -465,18 +480,22 @@ class L1db(object):
             return []
 
         table = self._schema.forcedSources
-        query = 'SELECT *  FROM "' + table.name + '" WHERE '
+        sources = None
 
-        # select by object id
-        ids = sorted(object_ids)
-        ids = ",".join(str(id) for id in ids)
-        query += '"diaObjectId" IN (' + ids + ') '
-
-        # execute select
         with Timer('DiaForcedSource select', self.config.timer):
             with _ansi_session(self._engine) as conn:
-                res = conn.execute(sql.text(query))
-                sources = self._convertResult(res, "DiaForcedSource")
+                for ids in _split(sorted(object_ids), 1000):
+
+                    query = 'SELECT *  FROM "' + table.name + '" WHERE '
+
+                    # select by object id
+                    ids = ",".join(str(id) for id in ids)
+                    query += '"diaObjectId" IN (' + ids + ') '
+
+                    # execute select
+                    res = conn.execute(sql.text(query))
+                    sources = self._convertResult(res, "DiaForcedSource", sources)
+
         _LOG.debug("found %s DiaForcedSources", len(sources))
         return sources
 
@@ -716,23 +735,37 @@ class L1db(object):
                 v = str(v)
             return v
 
+        def quoteId(columnName):
+            """Smart quoting for column names.
+            Lower-case names are not quoted.
+            """
+            if not columnName.islower():
+                columnName = '"' + columnName + '"'
+            return columnName
+
+        if conn.engine.name == "oracle":
+            return self._storeObjectsAfwOracle(objects, conn, table,
+                                               schema_table_name, replace,
+                                               extra_columns)
+
         schema = objects.getSchema()
         afw_fields = [field.getName() for key, field in schema]
 
         column_map = self._schema.getAfwColumns(schema_table_name)
 
         # list of columns (as in cat schema)
-        fields = ['"' + column_map[field].name + '"' for field in afw_fields]
+        fields = [column_map[field].name for field in afw_fields]
 
         # use extra columns that are not in fields already
         extra_fields = (extra_columns or {}).keys()
         extra_fields = [field for field in extra_fields if field not in fields]
 
         if replace and conn.engine.name in ('mysql', 'sqlite'):
-            query = 'REPLACE INTO'
+            query = 'REPLACE INTO '
         else:
-            query = 'INSERT INTO'
-        query += ' "' + table.name + '" (' + ','.join(fields + extra_fields) + ') VALUES '
+            query = 'INSERT INTO '
+        qfields = [quoteId(field) for field in fields + extra_fields]
+        query += quoteId(table.name) + ' (' + ','.join(qfields) + ') ' + 'VALUES '
 
         values = []
         for rec in objects:
@@ -768,7 +801,93 @@ class L1db(object):
             res = conn.execute(sql.text(query))
         _LOG.debug("inserted %s intervals", res.rowcount)
 
-    def _convertResult(self, res, table_name):
+    def _storeObjectsAfwOracle(self, objects, conn, table, schema_table_name,
+                               replace=False, extra_columns=None):
+        """Store method for Oracle.
+
+        Takes catalog of records and stores a bunch of objects in a table.
+
+        Parameters
+        ----------
+        objects : `afw.table.BaseCatalog`
+            Catalog containing object records
+        conn :
+            Database connection
+        table : `sqlalchemy.Table`
+            Database table
+        schema_table_name : `str`
+            Name of the table to be used for finding table schema.
+        replace : `boolean`
+            If `True` then use replace instead of INSERT (should be more efficient)
+        extra_columns : `dict`, optional
+            Mapping (column_name, column_value) which gives column values to add
+            to every row, only if column is missing in catalog records.
+        """
+
+        def quoteId(columnName):
+            """Smart quoting for column names.
+            Lower-case naems are not quoted (Oracle backend needs them unquoted).
+            """
+            if not columnName.islower():
+                columnName = '"' + columnName + '"'
+            return columnName
+
+        schema = objects.getSchema()
+        afw_fields = [field.getName() for key, field in schema]
+
+        column_map = self._schema.getAfwColumns(schema_table_name)
+
+        # list of columns (as in cat schema)
+        fields = [column_map[field].name for field in afw_fields]
+
+        # use extra columns that are not in fields already
+        extra_fields = (extra_columns or {}).keys()
+        extra_fields = [field for field in extra_fields if field not in fields]
+
+        qfields = [quoteId(field) for field in fields + extra_fields]
+
+        if not replace:
+            vals = [":col{}".format(i) for i in range(len(fields))]
+            vals += [":extcol{}".format(i) for i in range(len(extra_fields))]
+            query = 'INSERT INTO ' + quoteId(table.name)
+            query += ' (' + ','.join(qfields) + ') VALUES'
+            query += ' (' + ','.join(vals) + ')'
+        else:
+            qvals = [":col{} {}".format(i, quoteId(field)) for i, field in enumerate(fields)]
+            qvals += [":extcol{} {}".format(i, quoteId(field)) for i, field in enumerate(extra_fields)]
+            pks = ('pixelId', 'diaObjectId')
+            onexpr = ["SRC.{col} = DST.{col}".format(col=quoteId(col)) for col in pks]
+            setexpr = ["DST.{col} = SRC.{col}".format(col=quoteId(col))
+                       for col in fields + extra_fields if col not in pks]
+            vals = ["SRC.{col}".format(col=quoteId(col)) for col in fields + extra_fields]
+            query = "MERGE INTO {} DST ".format(quoteId(table.name))
+            query += "USING (SELECT {} FROM DUAL) SRC ".format(", ".join(qvals))
+            query += "ON ({}) ".format(" AND ".join(onexpr))
+            query += "WHEN MATCHED THEN UPDATE SET {} ".format(" ,".join(setexpr))
+            query += "WHEN NOT MATCHED THEN INSERT "
+            query += "({}) VALUES ({})".format(','.join(qfields), ','.join(vals))
+        # _LOG.info("query: %s", query)
+
+        values = []
+        for rec in objects:
+            row = {}
+            for i, field in enumerate(afw_fields):
+                value = rec[field]
+                if column_map[field].type == "DATETIME":
+                    # convert seconds into datetime
+                    value = datetime.utcfromtimestamp(value)
+                row["col{}".format(i)] = value
+            for i, field in enumerate(extra_fields):
+                row["extcol{}".format(i)] = extra_columns[field]
+            values.append(row)
+
+        # _LOG.debug("query: %s", query)
+        _LOG.info("%s: will store %d records", table.name, len(objects))
+        with Timer(table.name + ' insert', self.config.timer):
+            res = conn.execute(sql.text(query), values)
+        _LOG.debug("inserted %s intervals", res.rowcount)
+
+    def _convertResult(self, res, table_name, catalog=None):
         """Convert result set into output catalog.
 
         Parameters
@@ -777,19 +896,23 @@ class L1db(object):
             SQLAlchemy result set returned by query.
         table_name : `str`
             Name of the table.
+        catalog : `afw.table.BaseCatalog`
+            If not None then extend existing catalog
 
         Returns
         -------
-        `afw.table.BaseCatalog` instance
+        `afw.table.BaseCatalog` instance, if ``catalog`` is None then new
+        instance is returned, otherwise ``catalog`` is returned
         """
         # make catalog schema
         columns = res.keys()
         schema, col_map = self._schema.getAfwSchema(table_name, columns)
-        _LOG.debug("_convertResult: schema: %s", schema)
-        _LOG.debug("_convertResult: col_map: %s", col_map)
+        if catalog is None:
+            _LOG.debug("_convertResult: schema: %s", schema)
+            _LOG.debug("_convertResult: col_map: %s", col_map)
+            catalog = afwTable.BaseCatalog(schema)
 
         # fill catalog
-        catalog = afwTable.BaseCatalog(schema)
         for row in res:
             record = catalog.addNew()
             for col, value in row.items():
