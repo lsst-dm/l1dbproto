@@ -706,6 +706,109 @@ class L1db(object):
             to every row, only if column is missing in catalog records.
         """
 
+        def quoteValue(v):
+            """Quote and escape values"""
+            if v is None:
+                v = "NULL"
+            elif isinstance(v, datetime):
+                v = "'" + str(v) + "'"
+            elif isinstance(v, str):
+                # we don't expect nasty stuff in strings
+                v = "'" + v + "'"
+            else:
+                # assume numeric stuff
+                v = str(v)
+            return v
+
+        def quoteColumn(columnName):
+            """Smart quoting for column names.
+            Lower-case names are not quoted.
+            """
+            if not columnName.islower():
+                columnName = '"' + columnName + '"'
+            return columnName
+
+        if conn.engine.name == "oracle":
+            return self._storeObjectsAfwOracle(objects, conn, table,
+                                               schema_table_name, replace,
+                                               extra_columns)
+
+        schema = objects.getSchema()
+        afw_fields = [field.getName() for key, field in schema]
+
+        column_map = self._schema.getAfwColumns(schema_table_name)
+
+        # list of columns (as in cat schema)
+        fields = [column_map[field].name for field in afw_fields]
+
+        # use extra columns that are not in fields already
+        extra_fields = (extra_columns or {}).keys()
+        extra_fields = [field for field in extra_fields if field not in fields]
+
+        if replace and conn.engine.name in ('mysql', 'sqlite'):
+            query = 'REPLACE INTO'
+        else:
+            query = 'INSERT INTO'
+        qfields = [quoteColumn(field) for field in fields + extra_fields]
+        query += ' "' + table.name + '" (' + ','.join(qfields) + ') ' + 'VALUES '
+
+        values = []
+        for rec in objects:
+            row = []
+            for field in afw_fields:
+                value = rec[field]
+                if column_map[field].type == "DATETIME":
+                    # convert seconds into datetime
+                    value = datetime.utcfromtimestamp(value)
+                row.append(quoteValue(value))
+            for field in extra_fields:
+                row.append(quoteValue(extra_columns[field]))
+            values.append('(' + ','.join(row) + ')')
+
+        if self.config.explain:
+            # run the same query with explain, only give it one row of data
+            self._explain(query + values[0], conn)
+
+        query += ','.join(values)
+
+        if replace and conn.engine.name == 'postgresql':
+            # This depends on that "replace" can only be true for DiaObjectLast table
+            pks = ('pixelId', 'diaObjectId')
+            query += " ON CONFLICT (\"{}\", \"{}\") DO UPDATE SET ".format(*pks)
+            fields = [column_map[field].name for field in afw_fields]
+            fields = ['"{0}" = EXCLUDED."{0}"'.format(field)
+                      for field in fields if field not in pks]
+            query += ', '.join(fields)
+
+        # _LOG.debug("query: %s", query)
+        _LOG.info("%s: will store %d records", table.name, len(objects))
+        with Timer(table.name + ' insert', self.config.timer):
+            res = conn.execute(sql.text(query))
+        _LOG.debug("inserted %s intervals", res.rowcount)
+
+    def _storeObjectsAfwOracle(self, objects, conn, table, schema_table_name,
+                               replace=False, extra_columns=None):
+        """Store method for Oracle.
+
+        Takes catalog of records and stores a bunch of objects in a table.
+
+        Parameters
+        ----------
+        objects : `afw.table.BaseCatalog`
+            Catalog containing object records
+        conn :
+            Database connection
+        table : `sqlalchemy.Table`
+            Database table
+        schema_table_name : `str`
+            Name of the table to be used for finding table schema.
+        replace : `boolean`
+            If `True` then use replace instead of INSERT (should be more efficient)
+        extra_columns : `dict`, optional
+            Mapping (column_name, column_value) which gives column values to add
+            to every row, only if column is missing in catalog records.
+        """
+
         def quoteValue(v, engine=None):
             """Quote and escape values"""
             if v is None:
@@ -742,53 +845,31 @@ class L1db(object):
         extra_fields = (extra_columns or {}).keys()
         extra_fields = [field for field in extra_fields if field not in fields]
 
-        if replace and conn.engine.name in ('mysql', 'sqlite'):
-            query = 'REPLACE INTO'
-        else:
-            query = 'INSERT INTO'
         qfields = [quoteColumn(field) for field in fields + extra_fields]
-        query += ' "' + table.name + '" (' + ','.join(qfields) + ') '
-        if conn.engine.name != 'oracle':
-            query += 'VALUES '
+        query = 'INSERT INTO ' + quoteColumn(table.name)
+        query += ' (' + ','.join(qfields) + ') VALUES'
+
+        vals = [":col{}".format(i) for i in range(len(fields))]
+        vals += [":extcol{}".format(i) for i in range(len(extra_fields))]
+        query += ' (' + ','.join(vals) + ')'
 
         values = []
         for rec in objects:
-            row = []
-            for field in afw_fields:
+            row = {}
+            for i, field in enumerate(afw_fields):
                 value = rec[field]
                 if column_map[field].type == "DATETIME":
                     # convert seconds into datetime
                     value = datetime.utcfromtimestamp(value)
-                row.append(quoteValue(value, conn.engine.name))
-            for field in extra_fields:
-                row.append(quoteValue(extra_columns[field], conn.engine.name))
-            if conn.engine.name != 'oracle':
-                values.append('(' + ','.join(row) + ')')
-            else:
-                values.append('SELECT ' + ','.join(row) + ' FROM DUAL')
-
-        if self.config.explain:
-            # run the same query with explain, only give it one row of data
-            self._explain(query + values[0], conn)
-
-        if conn.engine.name != 'oracle':
-            query += ','.join(values)
-        else:
-            query += ' UNION ALL '.join(values)
-
-        if replace and conn.engine.name == 'postgresql':
-            # This depends on that "replace" can only be true for DiaObjectLast table
-            pks = ('pixelId', 'diaObjectId')
-            query += " ON CONFLICT (\"{}\", \"{}\") DO UPDATE SET ".format(*pks)
-            fields = [column_map[field].name for field in afw_fields]
-            fields = ['"{0}" = EXCLUDED."{0}"'.format(field)
-                      for field in fields if field not in pks]
-            query += ', '.join(fields)
+                row["col{}".format(i)] = value
+            for i, field in enumerate(extra_fields):
+                row["extcol{}".format(i)] = extra_columns[field]
+            values.append(row)
 
         # _LOG.debug("query: %s", query)
         _LOG.info("%s: will store %d records", table.name, len(objects))
         with Timer(table.name + ' insert', self.config.timer):
-            res = conn.execute(sql.text(query))
+            res = conn.execute(sql.text(query), values)
         _LOG.debug("inserted %s intervals", res.rowcount)
 
     def _convertResult(self, res, table_name):
