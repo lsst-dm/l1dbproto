@@ -14,6 +14,8 @@ import yaml
 import sqlalchemy
 from sqlalchemy import (Column, Index, MetaData, PrimaryKeyConstraint,
                         UniqueConstraint, Table)
+from sqlalchemy.schema import CreateTable, CreateIndex
+from sqlalchemy.ext.compiler import compiles
 import lsst.afw.table as afwTable
 
 #----------------------------------
@@ -89,6 +91,24 @@ def make_minimal_dia_source_schema():
     return schema
 
 
+@compiles(CreateTable, "oracle")
+def _add_suffixes(element, compiler, **kw):
+    """Add all needed suffixed for Oracle CREATE TABLE statement"""
+    text = compiler.visit_create_table(element, **kw)
+    oracle_tablespace = element.element.info.get("oracle_tablespace")
+    if oracle_tablespace:
+        text += " TABLESPACE " + oracle_tablespace
+    return text
+
+
+@compiles(CreateIndex, "oracle")
+def _add_suffixes(element, compiler, **kw):
+    """Add all needed suffixed for Oracle CREATE INDEX statement"""
+    text = compiler.visit_create_index(element, **kw)
+    oracle_tablespace = element.element.info.get("oracle_tablespace")
+    if oracle_tablespace:
+        text += " TABLESPACE " + oracle_tablespace
+    return text
 
 #---------------------
 #  Class definition --
@@ -119,6 +139,8 @@ class L1dbSchema(object):
         Dictionary with table name for a key and `afw.table.Schema`
         for a value. Columns in schema will be added to standard L1DB
         schema (only if standard schema does not have matching column).
+    prefix : `str`, optional
+        Prefix to add to all scheam elements.
     """
 
     # map afw type names into cat type names
@@ -137,11 +159,12 @@ class L1dbSchema(object):
 
     def __init__(self, engine, dia_object_index, dia_object_nightly,
                  schema_file=None, extra_schema_file=None, column_map=None,
-                 afw_schemas=None):
+                 afw_schemas=None, prefix=""):
 
         self._engine = engine
         self._dia_object_index = dia_object_index
         self._dia_object_nightly = dia_object_nightly
+        self._prefix = prefix
 
         self._metadata = MetaData(self._engine)
         self._tables = {}
@@ -172,7 +195,7 @@ class L1dbSchema(object):
                               BLOB=sqlalchemy.types.LargeBinary,
                               CHAR=sqlalchemy.types.CHAR)
 
-    def makeSchema(self, drop=False, mysql_engine='InnoDB'):
+    def makeSchema(self, drop=False, mysql_engine='InnoDB', oracle_tablespace=None):
         """Create or re-create all tables.
 
         Parameters
@@ -183,42 +206,49 @@ class L1dbSchema(object):
             MySQL engine type to use for new tables.
         """
 
+        info = dict(oracle_tablespace=oracle_tablespace)
+
         if self._dia_object_index == 'pix_id_iov':
             # Special PK with HTM column in first position
-            constraints = self._tableIndices('DiaObjectIndexHtmFirst')
+            constraints = self._tableIndices('DiaObjectIndexHtmFirst', info)
         else:
-            constraints = self._tableIndices('DiaObject')
-        Table('DiaObject', self._metadata,
+            constraints = self._tableIndices('DiaObject', info)
+        Table(self._prefix+'DiaObject', self._metadata,
               *(self._tableColumns('DiaObject') + constraints),
-              mysql_engine=mysql_engine)
+              mysql_engine=mysql_engine,
+              info=info)
 
         if self._dia_object_nightly:
             # Same as DiaObject but no index
-            Table('DiaObjectNightly', self._metadata,
+            Table(self._prefix+'DiaObjectNightly', self._metadata,
                   *self._tableColumns('DiaObject'),
-                  mysql_engine=mysql_engine)
+                  mysql_engine=mysql_engine,
+                  info=info)
 
         if self._dia_object_index == 'last_object_table':
             # Same as DiaObject but with special index
-            Table('DiaObjectLast', self._metadata,
+            Table(self._prefix+'DiaObjectLast', self._metadata,
                   *(self._tableColumns('DiaObject') +
-                    self._tableIndices('DiaObjectLast')),
-                  mysql_engine=mysql_engine)
+                    self._tableIndices('DiaObjectLast', info)),
+                  mysql_engine=mysql_engine,
+                  info=info)
 
         # for all other tables use index definitions in schema
         for table_name in ('DiaSource', 'SSObject', 'DiaForcedSource', 'DiaObject_To_Object_Match'):
-            Table(table_name, self._metadata,
+            Table(self._prefix+table_name, self._metadata,
                   *(self._tableColumns(table_name) +
-                    self._tableIndices(table_name)),
-                  mysql_engine=mysql_engine)
+                    self._tableIndices(table_name, info)),
+                  mysql_engine=mysql_engine,
+                  info=info)
 
         # special table to track visits, only used by prototype
-        Table('L1DbProtoVisits', self._metadata,
+        Table(self._prefix+'L1DbProtoVisits', self._metadata,
               Column('visitId', sqlalchemy.types.BigInteger, nullable=False),
               Column('visitTime', sqlalchemy.types.TIMESTAMP, nullable=False),
-              PrimaryKeyConstraint('visitId', name='PK_L1DbProtoVisits'),
-              Index('IDX_L1DbProtoVisits_visitTime', 'visitTime'),
-              mysql_engine=mysql_engine)
+              PrimaryKeyConstraint('visitId', name=self._prefix+'PK_L1DbProtoVisits'),
+              Index(self._prefix+'IDX_L1DbProtoVisits_vTime', 'visitTime', info=info),
+              mysql_engine=mysql_engine,
+              info=info)
 
         # create all tables (optionally drop first)
         if drop:
@@ -522,7 +552,7 @@ class L1dbSchema(object):
         ctype = self._afw_type_map[field.getTypeString()]
         return dict(name=column, type=ctype, nullable=True)
 
-    def _tableIndices(self, table_name):
+    def _tableIndices(self, table_name, info):
         """Return set of constraints/indices in a table
 
         Parameters
@@ -541,11 +571,11 @@ class L1dbSchema(object):
         index_defs = []
         for index in table_schema.indices:
             if index.type == "INDEX":
-                index_defs.append(Index(index.name, *index.columns))
+                index_defs.append(Index(self._prefix+index.name, *index.columns, info=info))
             else:
                 kwargs = {}
                 if index.name:
-                    kwargs['name'] = index.name
+                    kwargs['name'] = self._prefix+index.name
                 if index.type == "PRIMARY":
                     index_defs.append(PrimaryKeyConstraint(*index.columns, **kwargs))
                 elif index.type == "UNIQUE":
@@ -589,7 +619,7 @@ class L1dbSchema(object):
         """
         table = self._tables.get(name)
         if table is None:
-            table = Table(name, self._metadata, autoload=True)
+            table = Table(self._prefix+name, self._metadata, autoload=True)
             self._tables[name] = table
             _LOG.debug("read table schema for %s: %s", name, table.c)
         return table

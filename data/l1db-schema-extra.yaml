@@ -23,7 +23,7 @@ indices:
   - pixelId
   - diaObjectId
   type: PRIMARY
-- name: IDX_DiaObjectLast_diaObjectId
+- name: IDX_DiaObjLast_diaObjId
   columns:
   - diaObjectId
   type: INDEX
@@ -39,7 +39,7 @@ indices:
   - diaObjectId
   - validityStart
   type: PRIMARY
-- name: IDX_DiaObject_diaObjectId
+- name: IDX_DiaObject_diaObjId
   columns:
   - diaObjectId
   type: INDEX

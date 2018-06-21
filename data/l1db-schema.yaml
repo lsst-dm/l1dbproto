@@ -511,7 +511,7 @@ indices:
   - diaObjectId
   - validityStart
   type: PRIMARY
-- name: IDX_DiaObject_validityStart
+- name: IDX_DiaObject_valStart
   columns:
   - validityStart
   type: INDEX
@@ -1561,11 +1561,11 @@ indices:
   columns:
   - ccdVisitId
   type: INDEX
-- name: IDX_DiaSource_diaObjectId
+- name: IDX_DiaSource_diaObjId
   columns:
   - diaObjectId
   type: INDEX
-- name: IDX_DiaSource_ssObjectId
+- name: IDX_DiaSource_ssObjId
   columns:
   - ssObjectId
   type: INDEX
@@ -1625,7 +1625,7 @@ indices:
   - diaObjectId
   - ccdVisitId
   type: PRIMARY
-- name: IDX_DiaForcedSource_ccdVisitId
+- name: IDX_DiaFSource_ccdVisitId
   columns:
   - ccdVisitId
   type: INDEX
@@ -1654,7 +1654,7 @@ columns:
   description: Natural log of the probability that the observed diaObject is the same
     as the nearby object.
 indices:
-- name: IDX_DiaO2OMatch_diaObjectId
+- name: IDX_DiaO2OMatch_diaObjId
   columns:
   - diaObjectId
   type: INDEX

@@ -159,6 +159,9 @@ class L1dbConfig(pexConfig.Config):
     column_map = Field(dtype=str,
                        doc="Location of (YAML) configuration file with column mapping",
                        default=_data_file_name("l1db-afw-map.yaml"))
+    prefix = Field(dtype=str,
+                   doc="Prefix to add to table names and index names",
+                   default="")
     explain = Field(dtype=bool,
                     doc="If True then run EXPLAIN SQL command on each executed query",
                     default=False)
@@ -198,16 +201,14 @@ class L1db(object):
         _LOG.info("    schema_file: %s", self.config.schema_file)
         _LOG.info("    extra_schema_file: %s", self.config.extra_schema_file)
         _LOG.info("    column_map: %s", self.config.column_map)
+        _LOG.info("    schema prefix: %s", self.config.prefix)
 
         # engine is reused between multiple processes, make sure that we don't
         # share connections by disabling pool (by using NullPool class)
+        kw = dict(poolclass=NullPool)
         if self.config.isolation_level is not None:
-            self._engine = sqlalchemy.create_engine(self.config.db_url,
-                                                    poolclass=NullPool,
-                                                    isolation_level=self.config.isolation_level)
-        else:
-            self._engine = sqlalchemy.create_engine(self.config.db_url,
-                                                    poolclass=NullPool)
+            kw.update(isolation_level=self.config.isolation_level)
+        self._engine = sqlalchemy.create_engine(self.config.db_url, **kw)
 
         self._schema = l1dbschema.L1dbSchema(engine=self._engine,
                                              dia_object_index=self.config.dia_object_index,
@@ -215,7 +216,8 @@ class L1db(object):
                                              schema_file=self.config.schema_file,
                                              extra_schema_file=self.config.extra_schema_file,
                                              column_map=self.config.column_map,
-                                             afw_schemas=afw_schemas)
+                                             afw_schemas=afw_schemas,
+                                             prefix=self.config.prefix)
 
     #-------------------
     #  Public methods --
@@ -669,7 +671,7 @@ class L1db(object):
             cursor = connection.cursor()
             cursor.execute("VACUUM ANALYSE")
 
-    def makeSchema(self, drop=False, mysql_engine='InnoDB'):
+    def makeSchema(self, drop=False, mysql_engine='InnoDB', oracle_tablespace=None):
         """Create or re-create all tables.
 
         Parameters
@@ -679,7 +681,7 @@ class L1db(object):
         mysql_engine : `str`, optional
             Name of the MySQL engine to use for new tables.
         """
-        self._schema.makeSchema(drop=drop, mysql_engine=mysql_engine)
+        self._schema.makeSchema(drop=drop, mysql_engine=mysql_engine, oracle_tablespace=oracle_tablespace)
 
     def _explain(self, query, conn):
         """Run the query with explain

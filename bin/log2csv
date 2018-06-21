@@ -11,6 +11,7 @@ from __future__ import print_function
 #--------------------------------
 from argparse import ArgumentParser
 from collections import defaultdict
+import gzip
 import logging
 import sys
 
@@ -84,11 +85,12 @@ def _parse_counts(line):
     """
     words = line.split()
     count = int(words[-1])
-    if "DiaObject" in words:
+    table_name = words[-4]
+    if table_name.endswith("DiaObject"):
         _values['obj_count'] += count
-    elif "DiaSource" in words:
+    elif table_name.endswith("DiaSource"):
         _values['src_count'] += count
-    elif "DiaForcedSource" in words:
+    elif table_name.endswith("DiaForcedSource"):
         _values['fsrc_count'] += count
 
 
@@ -102,40 +104,40 @@ def _parse_timers(line):
     words = line.replace('=', ' ').split()
     real = float(words[-5])
     cpu = float(words[-3]) + float(words[-1])
-    if " DiaObject select: " in line:
+    if "DiaObject select: " in line:
         _values['obj_select_real'] += real
         _values['obj_select_cpu'] += cpu
         _values['select_real'] += real
-    elif " DiaObject truncate: " in line:
+    elif "DiaObject truncate: " in line:
         _values['obj_trunc_real'] += real
         _values['obj_trunc_cpu'] += cpu
-    elif " DiaObjectLast delete: " in line:
+    elif "DiaObjectLast delete: " in line:
         _values['obj_last_delete_real'] += real
         _values['obj_last_delete_cpu'] += cpu
-    elif " DiaObject insert: " in line or " DiaObjectNightly insert: " in line:
+    elif "DiaObject insert: " in line or " DiaObjectNightly insert: " in line:
         _values['obj_insert_real'] += real
         _values['obj_insert_cpu'] += cpu
-    elif " DiaObjectLast insert: " in line:
+    elif "DiaObjectLast insert: " in line:
         _values['obj_last_insert_real'] += real
         _values['obj_last_insert_cpu'] += cpu
-    elif " DiaObjectNightly copy: " in line:
+    elif "DiaObjectNightly copy: " in line:
         _values['obj_daily_copy_real'] += real
         _values['obj_daily_copy_cpu'] += cpu
-    elif " DiaObjectNightly delete: " in line:
+    elif "DiaObjectNightly delete: " in line:
         _values['obj_daily_delete_real'] += real
         _values['obj_daily_delete_cpu'] += cpu
-    elif " DiaSource select: " in line:
+    elif "DiaSource select: " in line:
         _values['src_select_real'] += real
         _values['src_select_cpu'] += cpu
         _values['select_real'] += real
-    elif " DiaSource insert: " in line:
+    elif "DiaSource insert: " in line:
         _values['src_insert_real'] += real
         _values['src_insert_cpu'] += cpu
-    elif " DiaForcedSource select: " in line:
+    elif "DiaForcedSource select: " in line:
         _values['fsrc_select_real'] += real
         _values['fsrc_select_cpu'] += cpu
         _values['select_real'] += real
-    elif " DiaForcedSource insert: " in line:
+    elif "DiaForcedSource insert: " in line:
         _values['fsrc_insert_real'] += real
         _values['fsrc_insert_cpu'] += cpu
     elif " L1-store: " in line:
@@ -225,7 +227,7 @@ def main():
                         help='Save fewer columns into CSV file.')
     parser.add_argument('-d', '--daily', action='store_true', default=False,
                         help='Extract numbers from daily activities.')
-    parser.add_argument('file', help='Name of input log file', nargs='+')
+    parser.add_argument('file', help='Name of input log file, optionally compressed, use "-" for stdin', nargs='+')
     args = parser.parse_args()
 
     # configure logging
@@ -247,7 +249,17 @@ def main():
 
     # open each file in order
     for input in args.file:
-        for line in open(input):
+        if input == '-':
+            input = sys.stdin
+        else:
+            f = gzip.open(input, "rt")
+            try:
+                f.read(1)
+                f.seek(0)
+                input = f
+            except OSError:
+                input = open(input, "rt")
+        for line in input:
             for match, method in dispatch:
                 # if line matches then call corresponding method
                 if match in line:
