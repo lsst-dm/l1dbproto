@@ -9,11 +9,13 @@ from collections import namedtuple
 from contextlib import contextmanager
 from datetime import datetime
 import logging
+import numpy as np
 import os
 
 #-----------------------------
 # Imports for other modules --
 #-----------------------------
+import lsst.geom as geom
 import lsst.afw.table as afwTable
 import lsst.pex.config as pexConfig
 from lsst.pex.config import Field, ChoiceField, ListField
@@ -730,9 +732,13 @@ class L1db(object):
             elif isinstance(v, str):
                 # we don't expect nasty stuff in strings
                 v = "'" + v + "'"
+            elif isinstance(v, geom.Angle):
+                v = str(v.asDegrees())
             else:
-                # assume numeric stuff
-                v = str(v)
+                if np.isnan(v):
+                    v = "NULL"
+                else:
+                    v = str(v)
             return v
 
         def quoteId(columnName):
@@ -754,7 +760,7 @@ class L1db(object):
         column_map = self._schema.getAfwColumns(schema_table_name)
 
         # list of columns (as in cat schema)
-        fields = [column_map[field].name for field in afw_fields]
+        fields = [column_map[field].name for field in afw_fields if field in column_map]
 
         # use extra columns that are not in fields already
         extra_fields = (extra_columns or {}).keys()
@@ -771,6 +777,8 @@ class L1db(object):
         for rec in objects:
             row = []
             for field in afw_fields:
+                if field not in column_map:
+                    continue
                 value = rec[field]
                 if column_map[field].type == "DATETIME":
                     # convert seconds into datetime
@@ -910,7 +918,7 @@ class L1db(object):
         if catalog is None:
             _LOG.debug("_convertResult: schema: %s", schema)
             _LOG.debug("_convertResult: col_map: %s", col_map)
-            catalog = afwTable.BaseCatalog(schema)
+            catalog = afwTable.SourceCatalog(schema)
 
         # fill catalog
         for row in res:
@@ -922,6 +930,8 @@ class L1db(object):
                     if isinstance(value, datetime):
                         # convert datetime to number of seconds
                         value = int((value - datetime.utcfromtimestamp(0)).total_seconds())
+                    elif col.getTypeString() == 'Angle':
+                        value = value * geom.degrees
                     if value is not None:
                         record.set(col, value)
 
