@@ -118,6 +118,21 @@ def _add_suffixes(element, compiler, **kw):
 class L1dbSchema(object):
     """Class for management of L1DB schema.
 
+    Attributes
+    ----------
+    objects : `sqlalchemy.Table`
+        DiaObject table instance
+    objects_nightly : `sqlalchemy.Table`
+        DiaObjectNightly table instance, may be None
+    objects_last : `sqlalchemy.Table`
+        DiaObjectLast table instance, may be None
+    sources : `sqlalchemy.Table`
+        DiaSource table instance
+    forcedSources : `sqlalchemy.Table`
+        DiaForcedSource table instance
+    visits : `sqlalchemy.Table`
+        L1DbProtoVisits table instance
+
     Parameters
     ----------
     engine : `Engine`
@@ -167,7 +182,13 @@ class L1dbSchema(object):
         self._prefix = prefix
 
         self._metadata = MetaData(self._engine)
-        self._tables = {}
+
+        self.objects = None
+        self.objects_nightly = None
+        self.objects_last = None
+        self.sources = None
+        self.forcedSources = None
+        self.visits = None
 
         _LOG.debug("Reading column map file %s", column_map)
         with open(column_map) as yaml_stream:
@@ -195,15 +216,18 @@ class L1dbSchema(object):
                               BLOB=sqlalchemy.types.LargeBinary,
                               CHAR=sqlalchemy.types.CHAR)
 
-    def makeSchema(self, drop=False, mysql_engine='InnoDB', oracle_tablespace=None):
-        """Create or re-create all tables.
+        # generate schema for all tables, must be called last
+        self._makeTables()
+
+    def _makeTables(self, mysql_engine='InnoDB', oracle_tablespace=None):
+        """Generate schema for all tables.
 
         Parameters
         ----------
-        drop : boolean
-            If True then drop tables before creating new ones.
-        mysql_engine : `str`
+        mysql_engine : `str`, optional
             MySQL engine type to use for new tables.
+        oracle_tablespace : `str`, optional
+            Name of Oracle tablespace, only useful with oracle
         """
 
         info = dict(oracle_tablespace=oracle_tablespace)
@@ -213,42 +237,67 @@ class L1dbSchema(object):
             constraints = self._tableIndices('DiaObjectIndexHtmFirst', info)
         else:
             constraints = self._tableIndices('DiaObject', info)
-        Table(self._prefix+'DiaObject', self._metadata,
-              *(self._tableColumns('DiaObject') + constraints),
-              mysql_engine=mysql_engine,
-              info=info)
+        table = Table(self._prefix+'DiaObject', self._metadata,
+                      *(self._tableColumns('DiaObject') + constraints),
+                      mysql_engine=mysql_engine,
+                      info=info)
+        self.objects = table
 
         if self._dia_object_nightly:
             # Same as DiaObject but no index
-            Table(self._prefix+'DiaObjectNightly', self._metadata,
-                  *self._tableColumns('DiaObject'),
-                  mysql_engine=mysql_engine,
-                  info=info)
+            table = Table(self._prefix+'DiaObjectNightly', self._metadata,
+                          *self._tableColumns('DiaObject'),
+                          mysql_engine=mysql_engine,
+                          info=info)
+            self.objects_nightly = table
 
         if self._dia_object_index == 'last_object_table':
             # Same as DiaObject but with special index
-            Table(self._prefix+'DiaObjectLast', self._metadata,
-                  *(self._tableColumns('DiaObject') +
-                    self._tableIndices('DiaObjectLast', info)),
-                  mysql_engine=mysql_engine,
-                  info=info)
+            table = Table(self._prefix+'DiaObjectLast', self._metadata,
+                          *(self._tableColumns('DiaObject') +
+                            self._tableIndices('DiaObjectLast', info)),
+                          mysql_engine=mysql_engine,
+                          info=info)
+            self.objects_last = table
 
         # for all other tables use index definitions in schema
         for table_name in ('DiaSource', 'SSObject', 'DiaForcedSource', 'DiaObject_To_Object_Match'):
-            Table(self._prefix+table_name, self._metadata,
-                  *(self._tableColumns(table_name) +
-                    self._tableIndices(table_name, info)),
-                  mysql_engine=mysql_engine,
-                  info=info)
+            table = Table(self._prefix+table_name, self._metadata,
+                          *(self._tableColumns(table_name) +
+                            self._tableIndices(table_name, info)),
+                          mysql_engine=mysql_engine,
+                          info=info)
+            if table_name == 'DiaSource':
+                self.sources = table
+            elif table_name == 'DiaForcedSource':
+                self.forcedSources = table
 
         # special table to track visits, only used by prototype
-        Table(self._prefix+'L1DbProtoVisits', self._metadata,
-              Column('visitId', sqlalchemy.types.BigInteger, nullable=False),
-              Column('visitTime', sqlalchemy.types.TIMESTAMP, nullable=False),
-              PrimaryKeyConstraint('visitId', name=self._prefix+'PK_L1DbProtoVisits'),
-              Index(self._prefix+'IDX_L1DbProtoVisits_vTime', 'visitTime', info=info),
-              mysql_engine=mysql_engine,
-              info=info)
+        table = Table(self._prefix+'L1DbProtoVisits', self._metadata,
+                      Column('visitId', sqlalchemy.types.BigInteger, nullable=False),
+                      Column('visitTime', sqlalchemy.types.TIMESTAMP, nullable=False),
+                      PrimaryKeyConstraint('visitId', name=self._prefix+'PK_L1DbProtoVisits'),
+                      Index(self._prefix+'IDX_L1DbProtoVisits_vTime', 'visitTime', info=info),
+                      mysql_engine=mysql_engine,
+                      info=info)
+        self.visits = table
+
+    def makeSchema(self, drop=False, mysql_engine='InnoDB', oracle_tablespace=None):
+        """Create or re-create all tables.
+
+        Parameters
+        ----------
+        drop : boolean, optional
+            If True then drop tables before creating new ones.
+        mysql_engine : `str`, optional
+            MySQL engine type to use for new tables.
+        oracle_tablespace : `str`, optional
+            Name of Oracle tablespace, only useful with oracle
+        """
+
+        # re-make table schema for all needed tables with possibly different options
+        self._metadata.clear()
+        self._makeTables(mysql_engine=mysql_engine, oracle_tablespace=oracle_tablespace)
 
         # create all tables (optionally drop first)
         if drop:
@@ -256,42 +305,6 @@ class L1dbSchema(object):
             self._metadata.drop_all()
         _LOG.info('creating all tables')
         self._metadata.create_all()
-
-    @property
-    def visits(self):
-        """SQLAlchemy `Table` instance for L1DbProtoVisits table.
-        """
-        return self._table_schema('L1DbProtoVisits')
-
-    @property
-    def objects(self):
-        """SQLAlchemy `Table` instance for DiaObject table.
-        """
-        return self._table_schema('DiaObject')
-
-    @property
-    def objects_last(self):
-        """SQLAlchemy `Table` instance for DiaObjectLast table.
-        """
-        return self._table_schema('DiaObjectLast')
-
-    @property
-    def objects_nightly(self):
-        """SQLAlchemy `Table` instance for DiaObjectNightly table.
-        """
-        return self._table_schema('DiaObjectNightly')
-
-    @property
-    def sources(self):
-        """SQLAlchemy `Table` instance for DiaSource table.
-        """
-        return self._table_schema('DiaSource')
-
-    @property
-    def forcedSources(self):
-        """SQLAlchemy `Table` instance for DiaForcedSource table.
-        """
-        return self._table_schema('DiaForcedSource')
 
     def getAfwSchema(self, table_name, columns=None):
         """Return afw schema for given table.
@@ -602,24 +615,3 @@ class L1dbSchema(object):
             return REAL
         else:
             raise TypeError('cannot determine DOUBLE type, unexpected dialect: ' + self._engine.name)
-
-    def _table_schema(self, name):
-        """Return SQLAlchemy schema for a table.
-
-        This does lazy reading of table schema from metadata.
-
-        Parameters
-        ----------
-        name : `str`
-            Table name.
-
-        Returns
-        -------
-        `sqlalchemy.Table` instance.
-        """
-        table = self._tables.get(name)
-        if table is None:
-            table = Table(self._prefix+name, self._metadata, autoload=True)
-            self._tables[name] = table
-            _LOG.debug("read table schema for %s: %s", name, table.c)
-        return table
