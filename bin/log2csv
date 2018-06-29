@@ -35,8 +35,8 @@ def _configLogger(verbosity):
 class _Stat:
 
     def __init__(self, cnt=0, sum=0.):
-        self._cnt = 0
-        self._sum = 0
+        self._cnt = cnt
+        self._sum = sum
 
     def value(self):
         if self._cnt == 0:
@@ -107,7 +107,6 @@ def _parse_timers(line):
     if "DiaObject select: " in line:
         _values['obj_select_real'] += real
         _values['obj_select_cpu'] += cpu
-        _values['select_real'] += real
     elif "DiaObject truncate: " in line:
         _values['obj_trunc_real'] += real
         _values['obj_trunc_cpu'] += cpu
@@ -129,14 +128,12 @@ def _parse_timers(line):
     elif "DiaSource select: " in line:
         _values['src_select_real'] += real
         _values['src_select_cpu'] += cpu
-        _values['select_real'] += real
     elif "DiaSource insert: " in line:
         _values['src_insert_real'] += real
         _values['src_insert_cpu'] += cpu
     elif "DiaForcedSource select: " in line:
         _values['fsrc_select_real'] += real
         _values['fsrc_select_cpu'] += cpu
-        _values['select_real'] += real
     elif "DiaForcedSource insert: " in line:
         _values['fsrc_insert_real'] += real
         _values['fsrc_insert_cpu'] += cpu
@@ -184,6 +181,21 @@ _cols = ['visit',
          'obj_in_fov',
          'obj_count', 'src_count', 'fsrc_count']
 
+
+def _value(key):
+    """Return value for given key, special handling for some
+    computed values.
+    """
+    if key == "select_real":
+        sumkeys = ("obj_select_real", "src_select_real", "fsrc_select_real")
+        values = [_values[sk].value() for sk in sumkeys]
+        values = [value for value in values if value is not None]
+        if values:
+            return _Stat(1, sum(values))
+        else:
+            return _Stat()
+    return _values[key]
+
 # Flag to print CSV header line once
 _header = True
 
@@ -196,7 +208,7 @@ def _end_visit(line):
     if _header:
         print(','.join(_cols))
         _header = False
-    print(','.join(str(_values[c]) for c in _cols))
+    print(','.join(str(_value(c)) for c in _cols))
 
 # Map line sibstring to method
 _dispatch = [("Start processing visit", _new_visit),
