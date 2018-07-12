@@ -95,9 +95,12 @@ def make_minimal_dia_source_schema():
 def _add_suffixes(element, compiler, **kw):
     """Add all needed suffixed for Oracle CREATE TABLE statement"""
     text = compiler.visit_create_table(element, **kw)
+    _LOG.debug("text: %r", text)
     oracle_tablespace = element.element.info.get("oracle_tablespace")
+    _LOG.debug("oracle_tablespace: %r", oracle_tablespace)
     if oracle_tablespace:
         text += " TABLESPACE " + oracle_tablespace
+    _LOG.debug("text: %r", text)
     return text
 
 
@@ -105,9 +108,12 @@ def _add_suffixes(element, compiler, **kw):
 def _add_suffixes(element, compiler, **kw):
     """Add all needed suffixed for Oracle CREATE INDEX statement"""
     text = compiler.visit_create_index(element, **kw)
+    _LOG.debug("text: %r", text)
     oracle_tablespace = element.element.info.get("oracle_tablespace")
+    _LOG.debug("oracle_tablespace: %r", oracle_tablespace)
     if oracle_tablespace:
         text += " TABLESPACE " + oracle_tablespace
+    _LOG.debug("text: %r", text)
     return text
 
 #---------------------
@@ -296,7 +302,10 @@ class L1dbSchema(object):
         """
 
         # re-make table schema for all needed tables with possibly different options
+        _LOG.debug("clear metadata")
         self._metadata.clear()
+        _LOG.debug("re-do schema mysql_engine=%r oracle_tablespace=%r",
+                   mysql_engine, oracle_tablespace)
         self._makeTables(mysql_engine=mysql_engine, oracle_tablespace=oracle_tablespace)
 
         # create all tables (optionally drop first)
