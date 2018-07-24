@@ -168,6 +168,9 @@ class L1dbConfig(pexConfig.Config):
     timer = Field(dtype=bool,
                   doc="If True then print/log timing information",
                   default=False)
+    diaobject_index_hint = Field(dtype=str,
+                                 doc="Name of the index to use with Oracle index hint",
+                                 default=None)
 
 
 class L1db(object):
@@ -329,6 +332,9 @@ class L1db(object):
         else:
             columns = [table.c[col] for col in self.config.dia_object_columns]
             query = sql.select(columns)
+
+        if self.config.diaobject_index_hint:
+            query = query.with_hint(table, 'index_rs_asc(%(name)s "{}")'.format(self.config.diaobject_index_hint))
 
         # build selection
         exprlist = []
