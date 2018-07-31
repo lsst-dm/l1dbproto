@@ -97,7 +97,10 @@ def _add_suffixes(element, compiler, **kw):
     text = compiler.visit_create_table(element, **kw)
     _LOG.debug("text: %r", text)
     oracle_tablespace = element.element.info.get("oracle_tablespace")
+    oracle_iot = element.element.info.get("oracle_iot", False)
     _LOG.debug("oracle_tablespace: %r", oracle_tablespace)
+    if oracle_iot:
+        text += " ORGANIZATION INDEX"
     if oracle_tablespace:
         text += " TABLESPACE " + oracle_tablespace
     _LOG.debug("text: %r", text)
@@ -225,7 +228,7 @@ class L1dbSchema(object):
         # generate schema for all tables, must be called last
         self._makeTables()
 
-    def _makeTables(self, mysql_engine='InnoDB', oracle_tablespace=None):
+    def _makeTables(self, mysql_engine='InnoDB', oracle_tablespace=None, oracle_iot=False):
         """Generate schema for all tables.
 
         Parameters
@@ -234,6 +237,8 @@ class L1dbSchema(object):
             MySQL engine type to use for new tables.
         oracle_tablespace : `str`, optional
             Name of Oracle tablespace, only useful with oracle
+        oracle_iot : `bool`, optional
+            Make Index-organized DiaObjectLast table.
         """
 
         info = dict(oracle_tablespace=oracle_tablespace)
@@ -259,11 +264,13 @@ class L1dbSchema(object):
 
         if self._dia_object_index == 'last_object_table':
             # Same as DiaObject but with special index
+            info2 = info.copy()
+            info2.update(oracle_iot=oracle_iot)
             table = Table(self._prefix+'DiaObjectLast', self._metadata,
                           *(self._tableColumns('DiaObject') +
                             self._tableIndices('DiaObjectLast', info)),
                           mysql_engine=mysql_engine,
-                          info=info)
+                          info=info2)
             self.objects_last = table
 
         # for all other tables use index definitions in schema
@@ -288,7 +295,7 @@ class L1dbSchema(object):
                       info=info)
         self.visits = table
 
-    def makeSchema(self, drop=False, mysql_engine='InnoDB', oracle_tablespace=None):
+    def makeSchema(self, drop=False, mysql_engine='InnoDB', oracle_tablespace=None, oracle_iot=False):
         """Create or re-create all tables.
 
         Parameters
@@ -299,6 +306,8 @@ class L1dbSchema(object):
             MySQL engine type to use for new tables.
         oracle_tablespace : `str`, optional
             Name of Oracle tablespace, only useful with oracle
+        oracle_iot : `bool`, optional
+            Make Index-organized DiaObjectLast table.
         """
 
         # re-make table schema for all needed tables with possibly different options
@@ -306,7 +315,7 @@ class L1dbSchema(object):
         self._metadata.clear()
         _LOG.debug("re-do schema mysql_engine=%r oracle_tablespace=%r",
                    mysql_engine, oracle_tablespace)
-        self._makeTables(mysql_engine=mysql_engine, oracle_tablespace=oracle_tablespace)
+        self._makeTables(mysql_engine=mysql_engine, oracle_tablespace=oracle_tablespace, oracle_iot=oracle_iot)
 
         # create all tables (optionally drop first)
         if drop:

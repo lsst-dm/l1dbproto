@@ -677,7 +677,7 @@ class L1db(object):
             cursor = connection.cursor()
             cursor.execute("VACUUM ANALYSE")
 
-    def makeSchema(self, drop=False, mysql_engine='InnoDB', oracle_tablespace=None):
+    def makeSchema(self, drop=False, mysql_engine='InnoDB', oracle_tablespace=None, oracle_iot=False):
         """Create or re-create all tables.
 
         Parameters
@@ -686,8 +686,12 @@ class L1db(object):
             If True then drop tables before creating new ones.
         mysql_engine : `str`, optional
             Name of the MySQL engine to use for new tables.
+        oracle_iot : `bool`, optional
+            Make Index-organized DiaObjectLast table.
         """
-        self._schema.makeSchema(drop=drop, mysql_engine=mysql_engine, oracle_tablespace=oracle_tablespace)
+        self._schema.makeSchema(drop=drop, mysql_engine=mysql_engine,
+                                oracle_tablespace=oracle_tablespace,
+                                oracle_iot=oracle_iot)
 
     def _explain(self, query, conn):
         """Run the query with explain

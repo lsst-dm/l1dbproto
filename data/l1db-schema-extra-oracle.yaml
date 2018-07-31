@@ -1,0 +1,78 @@
+# Extra schema definitions compared to `cat` schema used by L1DB implementation.
+# This is a variant of l1db-schema-extra.yaml which is Oracle-specific,
+# DaiObjectLast PK includes all columns from SELECT (check dia_object_columns
+# config parameter)
+
+# DiaObject needs a special column for time of last seen DiaSource,
+# validityEnd should be allowed to have NULL (for +Infinity)
+table: DiaObject
+columns:
+- name: lastNonForcedSource
+  type: DATETIME
+  nullable: false
+  description: Last time when non-forced DIASource was seen for this object.
+- name: validityEnd
+  type: DATETIME
+  nullable: true
+  description: Time when validity of this diaObject ends.
+  default: null
+
+---
+# DiaObjectLast uses the same columns as DiaObject but has different index
+table: DiaObjectLast
+indices:
+- name: PK_DiaObjectLast
+  columns:
+  - pixelId
+  - diaObjectId
+  - lastNonForcedSource
+  - ra
+  - decl
+  - raSigma
+  - declSigma
+  - ra_decl_Cov
+  - radecTai
+  - pmRa
+  - pmRaSigma
+  - pmDecl
+  - pmDeclSigma
+  - parallax
+  - parallaxSigma
+  - pmRa_pmDecl_Cov
+  - pmRa_parallax_Cov
+  - pmDecl_parallax_Cov
+  - pmParallaxChi2
+  - pmParallaxNdata
+  - uPSFluxMean
+  - uFPFluxMean
+  - gPSFluxMean
+  - gFPFluxMean
+  - rPSFluxMean
+  - rFPFluxMean
+  - iPSFluxMean
+  - iFPFluxMean
+  - zPSFluxMean
+  - zFPFluxMean
+  - yPSFluxMean
+  - yFPFluxMean
+  type: PRIMARY
+- name: IDX_DiaObjLast_diaObjId
+  columns:
+  - diaObjectId
+  type: INDEX
+
+---
+# Special PK index for DiaObject table with spacial column being first
+# (should provide better locality)
+table: DiaObjectIndexHtmFirst
+indices:
+- name: PK_DiaObject
+  columns:
+  - pixelId
+  - diaObjectId
+  - validityStart
+  type: PRIMARY
+- name: IDX_DiaObject_diaObjId
+  columns:
+  - diaObjectId
+  type: INDEX
