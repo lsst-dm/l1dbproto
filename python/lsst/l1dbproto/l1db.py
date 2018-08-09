@@ -563,9 +563,8 @@ class L1db(object):
                         res = conn.execute(sql.text(query))
                     _LOG.debug("deleted %s objects", res.rowcount)
 
-                extra_columns = dict(lastNonForcedSource=dt, validityStart=dt,
-                                     validityEnd=None)
-                self._storeObjectsAfw(objs, conn, table, "DiaObject",
+                extra_columns = dict(lastNonForcedSource=dt)
+                self._storeObjectsAfw(objs, conn, table, "DiaObjectLast",
                                       replace=do_replace,
                                       extra_columns=extra_columns)
 

@@ -267,7 +267,7 @@ class L1dbSchema(object):
             info2 = info.copy()
             info2.update(oracle_iot=oracle_iot)
             table = Table(self._prefix+'DiaObjectLast', self._metadata,
-                          *(self._tableColumns('DiaObject') +
+                          *(self._tableColumns('DiaObjectLast') +
                             self._tableIndices('DiaObjectLast', info)),
                           mysql_engine=mysql_engine,
                           info=info2)

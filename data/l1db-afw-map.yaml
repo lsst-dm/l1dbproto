@@ -9,6 +9,12 @@ DiaObject:
   decl: coord_dec
   pixelId: pixelId
 
+DiaObjectLast:
+  diaObjectId: id
+  ra: coord_ra
+  decl: coord_dec
+  pixelId: indexer_id
+
 DiaSource:
   diaSourceId: id
   parentDiaSourceId: parent
