@@ -171,6 +171,12 @@ class L1dbConfig(pexConfig.Config):
     diaobject_index_hint = Field(dtype=str,
                                  doc="Name of the index to use with Oracle index hint",
                                  default=None)
+    dynamic_sampling_hint = Field(dtype=int,
+                                  doc="If non-zero then use dynamic_sampling hint",
+                                  default=0)
+    cardinality_hint = Field(dtype=int,
+                             doc="If non-zero then use cardinality hint",
+                             default=0)
 
 
 class L1db(object):
@@ -335,6 +341,10 @@ class L1db(object):
 
         if self.config.diaobject_index_hint:
             query = query.with_hint(table, 'index_rs_asc(%(name)s "{}")'.format(self.config.diaobject_index_hint))
+        if self.config.dynamic_sampling_hint > 0:
+            query = query.with_hint(table, 'dynamic_sampling(%(name)s {})'.format(self.config.dynamic_sampling_hint))
+        if self.config.cardinality_hint > 0:
+            query = query.with_hint(table, 'FIRST_ROWS_1 cardinality(%(name)s {})'.format(self.config.cardinality_hint))
 
         # build selection
         exprlist = []
