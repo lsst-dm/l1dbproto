@@ -150,15 +150,12 @@ class L1dbSchema(object):
         Indexing mode for DiaObject table, see :py:mod:`l1db` module.
     dia_object_nightly : `boolean`
         If `True` then create per-night DiaObject table as well.
-    schema_file : `str`, optional
-        Name of the YAML schema file, by default look for
-        $L1DBPROTO_DIR/data/l1db-schema.yaml file.
+    schema_file : `str`
+        Name of the YAML schema file.
     extra_schema_file : `str`, optional
-        Name of the YAML schema file with extra column definitions, by
-        default look for $L1DBPROTO_DIR/data/l1db-schema-extra.yaml file.
+        Name of the YAML schema file with extra column definitions.
     column_map : `str`, optional
-        Name of the YAML file with column mappings, by default look for
-        $L1DBPROTO_DIR/data/l1db-afw-map.yaml file.
+        Name of the YAML file with column mappings.
     afw_schemas : `dict`, optional
         Dictionary with table name for a key and `afw.table.Schema`
         for a value. Columns in schema will be added to standard L1DB
@@ -182,7 +179,7 @@ class L1dbSchema(object):
                                  CHAR="String")
 
     def __init__(self, engine, dia_object_index, dia_object_nightly,
-                 schema_file=None, extra_schema_file=None, column_map=None,
+                 schema_file, extra_schema_file=None, column_map=None,
                  afw_schemas=None, prefix=""):
 
         self._engine = engine
@@ -200,10 +197,13 @@ class L1dbSchema(object):
         self.visits = None
 
         _LOG.debug("Reading column map file %s", column_map)
-        with open(column_map) as yaml_stream:
-            # maps cat column name to afw column name
-            self._column_map = yaml.load(yaml_stream)
-            _LOG.debug("column map: %s", self._column_map)
+        if column_map:
+            with open(column_map) as yaml_stream:
+                # maps cat column name to afw column name
+                self._column_map = yaml.load(yaml_stream)
+                _LOG.debug("column map: %s", self._column_map)
+        else:
+            self._column_map = {}
         self._column_map_reverse = {}
         for table, cmap in self._column_map.items():
             # maps afw column name to cat column name
@@ -366,7 +366,7 @@ class L1dbSchema(object):
                                       units="rad")
             elif column.type == "BLOB":
                 # No BLOB support for now
-                pass
+                key = None
             else:
                 units = column.unit or ""
                 # some units in schema are not recognized by afw but we do not care
@@ -431,7 +431,7 @@ class L1dbSchema(object):
         cmap = {column.name: column for column in table.columns}
         return cmap
 
-    def _buildSchemas(self, schema_file, extra_schema_file, afw_schemas):
+    def _buildSchemas(self, schema_file, extra_schema_file=None, afw_schemas=None):
         """Create schema definitions for all tables.
 
         Reads YAML schemas and builds dictionary containing `TableDef`
@@ -441,8 +441,8 @@ class L1dbSchema(object):
         ----------
         schema_file : `str`
             Name of YAML file with standard cat schema.
-        extra_schema_file : `str`
-            Name of YAML file with extra table information.
+        extra_schema_file : `str`, optional
+            Name of YAML file with extra table information or `None`.
         afw_schemas : `dict`, optional
             Dictionary with table name for a key and `afw.table.Schema`
             for a value. Columns in schema will be added to standard L1DB
@@ -460,10 +460,13 @@ class L1dbSchema(object):
         _LOG.debug("Read %d tables from schema", len(tables))
 
         _LOG.debug("Reading schema file %s", extra_schema_file)
-        with open(extra_schema_file) as yaml_stream:
-            extras = list(yaml.load_all(yaml_stream))
-            # index it by table name
-            schemas_extra = {table['table']: table for table in extras}
+        if extra_schema_file:
+            with open(extra_schema_file) as yaml_stream:
+                extras = list(yaml.load_all(yaml_stream))
+                # index it by table name
+                schemas_extra = {table['table']: table for table in extras}
+        else:
+            schemas_extra = {}
 
         # merge extra schema into a regular schema, for now only columns are merged
         for table in tables:

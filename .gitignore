@@ -1,5 +1,7 @@
 .sconsign.dblite
 .sconf_temp/
+.coverage
+.cache/
 config.log
 *.pyc
 *.cfgc
@@ -10,4 +12,5 @@ config.log
 /var_sources.npy
 /l1db*.db*
 tests/.tests
+pytest_session.txt
 python/lsst/l1dbproto/version.py
