@@ -155,6 +155,8 @@ class APProto(object):
                             ' to intialize database. def: 1')
         parser.add_argument('--divide', type=int, default=0, metavar='NUM',
                             help='Divide FOV into NUM*NUM tiles for parallel processing')
+        parser.add_argument('--sources-region', default=False, action='store_true',
+                            help='Use region-based select for DiaSource')
 
         parser.add_argument('sources_file', help='Name of input file with sources')
         # add more command line options
@@ -328,6 +330,7 @@ class APProto(object):
             array of indices of sources, 1-dim ndarray, transient sources
             have negative indices
         tile : `tuple`
+            tile position (x, y)
         """
 
         name = ""
@@ -371,7 +374,10 @@ class APProto(object):
         with timer.Timer(name+"Source-read"):
 
             latest_objects_ids = [obj['id'] for obj in latest_objects]
-            read_srcs = db.getDiaSources(latest_objects_ids, dt)
+            if self.args.sources_region:
+                read_srcs = db.getDiaSourcesInRegion(ranges, dt)
+            else:
+                read_srcs = db.getDiaSources(latest_objects_ids, dt)
             _LOG.info(name+'database found %s sources', len(read_srcs))
 
             read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)

@@ -269,7 +269,7 @@ def main():
                 f.read(1)
                 f.seek(0)
                 input = f
-            except OSError:
+            except IOError:
                 input = open(input, "rt")
         for line in input:
             for match, method in dispatch:

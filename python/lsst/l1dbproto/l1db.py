@@ -403,22 +403,22 @@ class L1db(object):
             return []
 
         table = self._schema.sources
-        query = 'SELECT *  FROM "' + table.name + '" WHERE '
+        query = table.select()
 
         # build selection
         exprlist = []
         for low, upper in pixel_ranges:
             upper -= 1
             if low == upper:
-                exprlist.append('"pixelId" = ' + str(low))
+                exprlist.append(table.c.pixelId == low)
             else:
-                exprlist.append('"pixelId" BETWEEN {} AND {}'.format(low, upper))
-        query += '(' + ' OR '.join(exprlist) + ')'
+                exprlist.append(sql.expression.between(table.c.pixelId, low, upper))
+        query = query.where(sql.expression.or_(*exprlist))
 
         # execute select
         with Timer('DiaSource select', self.config.timer):
             with _ansi_session(self._engine) as conn:
-                res = conn.execute(sql.text(query))
+                res = conn.execute(query)
                 sources = self._convertResult(res, "DiaSource")
         _LOG.debug("found %s DiaSources", len(sources))
         return sources
@@ -863,11 +863,15 @@ class L1db(object):
 
         schema = objects.getSchema()
         afw_fields = [field.getName() for key, field in schema]
+        # _LOG.info("afw_fields: %s", afw_fields)
 
         column_map = self._schema.getAfwColumns(schema_table_name)
+        # _LOG.info("column_map: %s", column_map)
 
         # list of columns (as in cat schema)
-        fields = [column_map[field].name for field in afw_fields]
+        fields = [column_map[field].name for field in afw_fields
+                  if field in column_map]
+        # _LOG.info("fields: %s", fields)
 
         # use extra columns that are not in fields already
         extra_fields = (extra_columns or {}).keys()
@@ -900,12 +904,20 @@ class L1db(object):
         values = []
         for rec in objects:
             row = {}
-            for i, field in enumerate(afw_fields):
+            col = 0
+            for field in afw_fields:
+                if field not in column_map:
+                    continue
                 value = rec[field]
                 if column_map[field].type == "DATETIME":
                     # convert seconds into datetime
                     value = datetime.utcfromtimestamp(value)
-                row["col{}".format(i)] = value
+                elif isinstance(value, geom.Angle):
+                    value = str(value.asDegrees())
+                elif np.isnan(value):
+                    value = None
+                row["col{}".format(col)] = value
+                col += 1
             for i, field in enumerate(extra_fields):
                 row["extcol{}".format(i)] = extra_columns[field]
             values.append(row)
