@@ -28,7 +28,7 @@ from . import timer, l1dbschema
 # Local non-exported definitions --
 #----------------------------------
 
-_LOG = logging.getLogger(__name__)
+_LOG = logging.getLogger(__name__.partition(".")[2])  # strip leading "lsst."
 
 
 class Timer(object):
@@ -129,6 +129,13 @@ class L1dbConfig(pexConfig.Config):
                                            "REPEATABLE_READ": "Repeatable read",
                                            "SERIALIZABLE": "Serializable"},
                                   default="READ_COMMITTED")
+    connection_pool = Field(dtype=bool,
+                            doc=("If False then disable SQLAlchemy connection pool. "
+                                 "Do not use connection pool when forking."),
+                            default=True)
+    sql_echo = Field(dtype=bool,
+                     doc="If True then pass SQLAlchemy echo option.",
+                     default=False)
     dia_object_index = ChoiceField(dtype=str,
                                    doc="Indexing mode for DiaObject table",
                                    allowed={'baseline': "Index defined in baseline schema",
@@ -214,7 +221,9 @@ class L1db(object):
 
         # engine is reused between multiple processes, make sure that we don't
         # share connections by disabling pool (by using NullPool class)
-        kw = dict(poolclass=NullPool)
+        kw = dict(echo=self.config.sql_echo)
+        if not self.config.connection_pool:
+            kw.update(poolclass=NullPool)
         if self.config.isolation_level is not None:
             kw.update(isolation_level=self.config.isolation_level)
         self._engine = sqlalchemy.create_engine(self.config.db_url, **kw)
@@ -268,6 +277,9 @@ class L1db(object):
 
     def saveVisit(self, visitId, visitTime):
         """Store visit information.
+
+        This method is only used by ap_proto and is not intended for
+        production pipelines.
 
         Parameters
         ----------
@@ -392,15 +404,18 @@ class L1db(object):
         pixel_ranges: `list` of `tuple`
             Sequence of ranges, range is a tuple (minPixelID, maxPixelID).
             This defines set of pixel indices to be included in result.
+        dt : `datetime.datetime`
+            Time of the current visit
 
         Returns
         -------
-        `afw.table.BaseCatalog` instance
+        `afw.table.SourceCatalog` instance, `None` if ``read_sources_months``
+        configuration parameter is set to 0.
         """
 
         if self.config.read_sources_months == 0:
             _LOG.info("Skip DiaSources fetching")
-            return []
+            return None
 
         table = self._schema.sources
         query = table.select()
@@ -440,17 +455,18 @@ class L1db(object):
 
         Returns
         -------
-        `afw.table.BaseCatalog` instance
+        `afw.table.SourceCatalog` instance, `None` if ``read_sources_months``
+        configuration parameter is set to 0 or when ``object_ids`` is empty.
         """
-
 
         if self.config.read_sources_months == 0:
             _LOG.info("Skip DiaSources fetching")
-            return []
+            return None
 
         if not object_ids:
             _LOG.info("Skip DiaSources fetching - no Objects")
-            return []
+            # this should create a catalog, but the list of columns may be empty
+            return None
 
         table = self._schema.sources
         sources = None
@@ -488,16 +504,19 @@ class L1db(object):
 
         Returns
         -------
-        `afw.table.BaseCatalog` instance
+        `afw.table.SourceCatalog` instance, `None` if
+        ``read_forced_sources_months`` configuration parameter is set to 0
+        or when ``object_ids`` is empty.
         """
 
         if self.config.read_forced_sources_months == 0:
             _LOG.info("Skip DiaForceSources fetching")
-            return []
+            return None
 
         if not object_ids:
             _LOG.info("Skip DiaForceSources fetching - no Objects")
-            return []
+            # this should create a catalog, but the list of columns may be empty
+            return None
 
         table = self._schema.forcedSources
         sources = None

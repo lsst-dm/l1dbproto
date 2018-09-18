@@ -22,7 +22,7 @@ import lsst.afw.table as afwTable
 # Local non-exported definitions --
 #----------------------------------
 
-_LOG = logging.getLogger(__name__)
+_LOG = logging.getLogger(__name__.partition(".")[2])  # strip leading "lsst."
 
 # Classes for representing schema
 
