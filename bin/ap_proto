@@ -24,8 +24,9 @@ import time
 import numpy
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
-from lsst.l1dbproto import \
-    constants, DIA, generators, geom, l1db, l1dbschema, timer
+from lsst.l1dbproto import constants, DIA, generators, geom
+from lsst.dax.ppdb import (Ppdb, PpdbConfig, make_minimal_dia_object_schema,
+                           make_minimal_dia_source_schema, timer)
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
 #---------------------
@@ -169,7 +170,7 @@ class APProto(object):
         """Run whole shebang.
         """
 
-        config = l1db.L1dbConfig()
+        config = PpdbConfig()
         if self.args.config:
             config.load(self.args.config)
 
@@ -178,7 +179,7 @@ class APProto(object):
             return 0
 
         # instantiate db interface
-        db = l1db.L1db(config)
+        db = Ppdb(config)
 
         # Initialize starting values from database visits table
         last_visit = db.lastVisit()
@@ -378,10 +379,10 @@ class APProto(object):
                 read_srcs = db.getDiaSourcesInRegion(ranges, dt)
             else:
                 read_srcs = db.getDiaSources(latest_objects_ids, dt)
-            _LOG.info(name+'database found %s sources', len(read_srcs))
+            _LOG.info(name+'database found %s sources', len(read_srcs or []))
 
             read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
-            _LOG.info(name+'database found %s forced sources', len(read_srcs))
+            _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
 
         if not self.args.no_update:
 
@@ -418,7 +419,7 @@ class APProto(object):
         """
         mask = numpy.ndarray(len(latest_objects), dtype=bool)
         for i, obj in enumerate(latest_objects):
-            # TODO: For now we use L1DB units (degrees), will have to be changed
+            # TODO: For now we use PPDB units (degrees), will have to be changed
             # in case we adopt afw units.
             lonLat = LonLat.fromRadians(obj['coord_ra'].asRadians(), obj['coord_dec'].asRadians())
             dir_obj = UnitVector3d(lonLat)
@@ -429,10 +430,10 @@ class APProto(object):
     def _makeDiaObjectSchema(self):
         """Make afw.table schema for DiaObjects.
 
-        Schema should be compatible with L1DB schema and it should contain
+        Schema should be compatible with PPDB schema and it should contain
         all fields that have no default values in the schema.
         """
-        schema = l1dbschema.make_minimal_dia_object_schema()
+        schema = make_minimal_dia_object_schema()
         return schema
 
     def _makeDiaObjects(self, sources, indices, dt):
@@ -527,10 +528,10 @@ class APProto(object):
     def _makeDiaSourceSchema(self):
         """Make afw.table schema for DiaSource.
 
-        Schema should be compatible with L1DB schema and it should contain
+        Schema should be compatible with PPDB schema and it should contain
         all fields that have no default values in the schema.
         """
-        schema = l1dbschema.make_minimal_dia_source_schema()
+        schema = make_minimal_dia_source_schema()
         return schema
 
     def _makeDiaSources(self, sources, indices, visit_id):
@@ -584,12 +585,12 @@ class APProto(object):
     def _makeDiaForcedSourceSchema(self):
         """Make afw.table schema for DiaForcedSource.
 
-        Schema should be compatible with L1DB schema and it should contain
+        Schema should be compatible with PPDB schema and it should contain
         all fields that have no default values in the schema.
         """
         schema = afwTable.Schema()
 
-        # L1DB-specific stuff
+        # PPDB-specific stuff
         schema.addField("diaObjectId", "L")
         schema.addField("ccdVisitId", "L")
         schema.addField("flags", "L")

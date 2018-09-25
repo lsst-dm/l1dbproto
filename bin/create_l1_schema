@@ -17,7 +17,7 @@ import sys
 # Imports for other modules --
 #-----------------------------
 import lsst.afw.table as afwTable
-from lsst.l1dbproto import l1db, l1dbschema
+from lsst.dax.ppdb import Ppdb, PpdbConfig, make_minimal_dia_object_schema, make_minimal_dia_source_schema
 
 #---------------------
 # Local definitions --
@@ -41,7 +41,7 @@ def _configLogger(verbosity):
 
 def main():
 
-    descr = 'Create schema for L1 database.'
+    descr = 'Create schema for Prompt Products Database.'
     parser = ArgumentParser(description=descr)
     parser.add_argument('-v', '--verbose', action='count', default=0,
                         help='More verbose output, can use several times.')
@@ -63,17 +63,17 @@ def main():
     # configure logging
     _configLogger(args.verbose)
 
-    config = l1db.L1dbConfig()
+    config = PpdbConfig()
     if args.config:
         config.load(args.config)
 
     afw_schemas = None
     if args.association:
-        afw_schemas = dict(DiaObject=l1dbschema.make_minimal_dia_object_schema(),
-                           DiaSource=l1dbschema.make_minimal_dia_source_schema())
+        afw_schemas = dict(DiaObject=make_minimal_dia_object_schema(),
+                           DiaSource=make_minimal_dia_source_schema())
 
     # instantiate db interface
-    db = l1db.L1db(config=config, afw_schemas=afw_schemas)
+    db = Ppdb(config=config, afw_schemas=afw_schemas)
 
     # do it
     db.makeSchema(drop=args.drop, oracle_tablespace=args.tablespace, oracle_iot=args.iot)

@@ -1,11 +1,8 @@
 setupRequired(afw)
-setupRequired(pex_config)
 setupRequired(python)
-setupRequired(pyyaml)
 setupRequired(scons)
 setupRequired(sconsUtils)
 setupRequired(sphgeom)
-setupRequired(sqlalchemy)
 
 envPrepend(PATH, ${PRODUCT_DIR}/bin)
 envPrepend(PYTHONPATH, ${PRODUCT_DIR}/python)
