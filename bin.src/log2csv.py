@@ -1,27 +1,34 @@
 #!/bin/env python
 
-"""
-Script to read ap_proto logs and produce CSV file.
+# This file is part of l1dbproto.
+#
+# Developed for the LSST Data Management System.
+# This product includes software developed by the LSST Project
+# (http://www.lsst.org).
+# See the COPYRIGHT file at the top-level directory of this distribution
+# for details of code ownership.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Script to read ap_proto logs and produce CSV file.
 """
 
-from __future__ import print_function
-
-#--------------------------------
-#  Imports of standard modules --
-#--------------------------------
 from argparse import ArgumentParser
 from collections import defaultdict
 import gzip
 import logging
 import sys
-
-#-----------------------------
-# Imports for other modules --
-#-----------------------------
-
-#---------------------
-# Local definitions --
-#---------------------
 
 
 def _configLogger(verbosity):
@@ -31,6 +38,7 @@ def _configLogger(verbosity):
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
+
 
 class _Stat:
 
@@ -163,6 +171,7 @@ def _parse_select_count(line):
     elif "after filtering" in line:
         _values['obj_in_fov'] += int(words[-2])
 
+
 # List of columns (keys in _values dictionary)
 _cols = ['visit',
          'obj_select_real', 'obj_select_cpu',
@@ -196,6 +205,7 @@ def _value(key):
             return _Stat()
     return _values[key]
 
+
 # Flag to print CSV header line once
 _header = True
 
@@ -210,6 +220,7 @@ def _end_visit(line):
         _header = False
     print(','.join(str(_value(c)) for c in _cols))
 
+
 # Map line sibstring to method
 _dispatch = [("Start processing visit", _new_visit),
              (" row count: ", _parse_counts),
@@ -219,14 +230,11 @@ _dispatch = [("Start processing visit", _new_visit),
              ("Finished processing visit", _end_visit),  # must be last
              ]
 
+
 _daily_dispatch = [("Start processing visit", _new_visit),
                    (": real=", _parse_timers),
                    ("Done with daily activities", _end_visit),  # must be last
                    ]
-
-#---------------------------------
-#  Application class definition --
-#---------------------------------
 
 
 def main():
@@ -239,7 +247,8 @@ def main():
                         help='Save fewer columns into CSV file.')
     parser.add_argument('-d', '--daily', action='store_true', default=False,
                         help='Extract numbers from daily activities.')
-    parser.add_argument('file', help='Name of input log file, optionally compressed, use "-" for stdin', nargs='+')
+    parser.add_argument('file', nargs='+',
+                        help='Name of input log file, optionally compressed, use "-" for stdin')
     args = parser.parse_args()
 
     # configure logging

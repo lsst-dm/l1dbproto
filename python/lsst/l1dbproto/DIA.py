@@ -1,29 +1,31 @@
-"""
-Module defining DIA class and related methods.
+# This file is part of l1dbproto.
+#
+# Developed for the LSST Data Management System.
+# This product includes software developed by the LSST Project
+# (http://www.lsst.org).
+# See the COPYRIGHT file at the top-level directory of this distribution
+# for details of code ownership.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Module defining DIA class and related methods.
 """
 
-#--------------------------------
-#  Imports of standard modules --
-#--------------------------------
 import math
 import numpy
 
-#-----------------------------
-# Imports for other modules --
-#-----------------------------
 from . import generators
-
-#----------------------------------
-# Local non-exported definitions --
-#----------------------------------
-
-#------------------------
-# Exported definitions --
-#------------------------
-
-#---------------------
-#  Class definition --
-#---------------------
 
 
 class DIA(object):
@@ -33,10 +35,6 @@ class DIA(object):
     This class is responsible for producing a set of DiaSources and
     DiaForcedSources.
     """
-
-    #----------------
-    #  Constructor --
-    #----------------
     def __init__(self, xyz, open_angle, vars, n_trans):
         """
         @param xyz:  unit vector giving pointing direction
@@ -49,10 +47,6 @@ class DIA(object):
         self._open_angle = open_angle
         self._vars = vars
         self._n_trans = n_trans
-
-    #-------------------
-    #  Public methods --
-    #-------------------
 
     def makeSources(self):
         """
@@ -67,7 +61,6 @@ class DIA(object):
         2. array of indices of variable sources, 1-dim ndarray, transient
            sources have negative indices.
         """
-
         cos_open = math.cos(self._open_angle / 2.)
 
         # calc inner product of every variable source to our pointing direction

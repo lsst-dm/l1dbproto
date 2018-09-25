@@ -1,3 +1,4 @@
 # -*- python -*-
 from lsst.sconsUtils import scripts
-scripts.BasicSConstruct("l1dbproto")
+# Python-only package
+scripts.BasicSConstruct("l1dbproto", disableCc=True)
