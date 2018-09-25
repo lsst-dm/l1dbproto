@@ -2,7 +2,8 @@
 
 """ Application to read and parse schema from cat package.
 
-Reads and pasres schema and generates code that can be pasted into l1db.py.
+Reads and pasres schema and generates code that can be pasted into Python
+code or saved as YAML file.
 """
 
 from __future__ import print_function
@@ -30,7 +31,7 @@ STATE_TABLE = 1
 STATE_TABLE_SKIP = 2
 STATE_DESCR = 3
 
-# Tables that we need for L1DB
+# Tables that we need for PPDB
 TABLES = ['DiaObject', 'SSObject', 'DiaSource', 'DiaForcedSource', 'DiaObject_To_Object_Match']
 
 #---------------------------------
