@@ -1,28 +1,39 @@
 #!/bin/env python
 
-""" Application to read and parse schema from cat package.
+# This file is part of l1dbproto.
+#
+# Developed for the LSST Data Management System.
+# This product includes software developed by the LSST Project
+# (http://www.lsst.org).
+# See the COPYRIGHT file at the top-level directory of this distribution
+# for details of code ownership.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-Reads and pasres schema and generates code that can be pasted into l1db.py.
+"""Application to read and parse schema from cat package.
+
+Reads and pasres schema and generates code that can be pasted into Python
+code or saved as YAML file.
 """
 
-from __future__ import print_function
-
-#--------------------------------
-#  Imports of standard modules --
-#--------------------------------
 from argparse import ArgumentParser
 import re
 import os
 import sys
 
-#-----------------------------
-# Imports for other modules --
-#-----------------------------
 import yaml
 
-#---------------------
-# Local definitions --
-#---------------------
 
 # parsing states
 STATE_TOP = 0
@@ -30,12 +41,8 @@ STATE_TABLE = 1
 STATE_TABLE_SKIP = 2
 STATE_DESCR = 3
 
-# Tables that we need for L1DB
+# Tables that we need for PPDB
 TABLES = ['DiaObject', 'SSObject', 'DiaSource', 'DiaForcedSource', 'DiaObject_To_Object_Match']
-
-#---------------------------------
-#  Application class definition --
-#---------------------------------
 
 
 def main():

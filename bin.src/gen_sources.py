@@ -1,28 +1,39 @@
 #!/bin/env python
 
-""" Application to generate a list of random positions for sources.
+# This file is part of l1dbproto.
+#
+# Developed for the LSST Data Management System.
+# This product includes software developed by the LSST Project
+# (http://www.lsst.org).
+# See the COPYRIGHT file at the top-level directory of this distribution
+# for details of code ownership.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Application to generate a list of random positions for sources.
 
 Generates and saves the list of sky coordinates for the sources to
 be used by other applications.
 """
 
-#--------------------------------
-#  Imports of standard modules --
-#--------------------------------
 from argparse import ArgumentParser
 import logging
 import math
 import numpy
 import sys
 
-#-----------------------------
-# Imports for other modules --
-#-----------------------------
 from lsst.l1dbproto import generators
-
-#---------------------
-# Local definitions --
-#---------------------
 
 
 def _configLogger(verbosity):
@@ -33,11 +44,8 @@ def _configLogger(verbosity):
 
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
-FOV = 3.5  # degrees
 
-#---------------------------------
-#  Application class definition --
-#---------------------------------
+FOV = 3.5  # degrees
 
 
 def main():
@@ -67,6 +75,7 @@ def main():
 
     points = generators.rand_sphere_xyz(counts, args.hemi)
     numpy.save(args.file, points)
+
 
 #
 #  run application when imported as a main module

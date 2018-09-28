@@ -1,16 +1,33 @@
 #!/bin/env python
 
-"""
-Script which simulates AP workflow access to L1 database.
+# This file is part of l1dbproto.
+#
+# Developed for the LSST Data Management System.
+# This product includes software developed by the LSST Project
+# (http://www.lsst.org).
+# See the COPYRIGHT file at the top-level directory of this distribution
+# for details of code ownership.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Script which simulates AP workflow access to L1 database.
 
 It generates approximately realistic result of difference image analysis,
 source-to-object matching, and forced photometry and stores all that in
 a database.
 """
 
-#--------------------------------
-#  Imports of standard modules --
-#--------------------------------
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 import logging
@@ -18,19 +35,14 @@ import os
 import sys
 import time
 
-#-----------------------------
-# Imports for other modules --
-#-----------------------------
 import numpy
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
-from lsst.l1dbproto import \
-    constants, DIA, generators, geom, l1db, l1dbschema, timer
+from lsst.l1dbproto import constants, DIA, generators, geom
+from lsst.dax.ppdb import (Ppdb, PpdbConfig, make_minimal_dia_object_schema,
+                           make_minimal_dia_source_schema, timer)
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
-#---------------------
-# Local definitions --
-#---------------------
 
 COLOR_RED = '\033[1;31m'
 COLOR_GREEN = '\033[1;32m'
@@ -39,6 +51,7 @@ COLOR_BLUE = '\033[1;34m'
 COLOR_MAGENTA = '\033[1;35m'
 COLOR_CYAN = '\033[1;36m'
 COLOR_RESET = '\033[0m'
+
 
 _LOG = logging.getLogger('ap_proto')
 
@@ -52,6 +65,7 @@ def _configLogger(verbosity):
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
+
 
 _dt_format = ('%Y-%m-%d %H:%M:%S', 'YYYY-MM-DD hh:mm:ss')
 
@@ -118,10 +132,6 @@ _OUTSIDER = -666
 # transient ID start value
 _TRANSIENT_START_ID = 1000000000
 
-#----------------
-#  Application --
-#----------------
-
 
 class APProto(object):
     """Implementation of Alert Production prototype.
@@ -169,7 +179,7 @@ class APProto(object):
         """Run whole shebang.
         """
 
-        config = l1db.L1dbConfig()
+        config = PpdbConfig()
         if self.args.config:
             config.load(self.args.config)
 
@@ -178,7 +188,7 @@ class APProto(object):
             return 0
 
         # instantiate db interface
-        db = l1db.L1db(config)
+        db = Ppdb(config)
 
         # Initialize starting values from database visits table
         last_visit = db.lastVisit()
@@ -378,10 +388,10 @@ class APProto(object):
                 read_srcs = db.getDiaSourcesInRegion(ranges, dt)
             else:
                 read_srcs = db.getDiaSources(latest_objects_ids, dt)
-            _LOG.info(name+'database found %s sources', len(read_srcs))
+            _LOG.info(name+'database found %s sources', len(read_srcs or []))
 
             read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
-            _LOG.info(name+'database found %s forced sources', len(read_srcs))
+            _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
 
         if not self.args.no_update:
 
@@ -418,7 +428,7 @@ class APProto(object):
         """
         mask = numpy.ndarray(len(latest_objects), dtype=bool)
         for i, obj in enumerate(latest_objects):
-            # TODO: For now we use L1DB units (degrees), will have to be changed
+            # TODO: For now we use PPDB units (degrees), will have to be changed
             # in case we adopt afw units.
             lonLat = LonLat.fromRadians(obj['coord_ra'].asRadians(), obj['coord_dec'].asRadians())
             dir_obj = UnitVector3d(lonLat)
@@ -429,10 +439,10 @@ class APProto(object):
     def _makeDiaObjectSchema(self):
         """Make afw.table schema for DiaObjects.
 
-        Schema should be compatible with L1DB schema and it should contain
+        Schema should be compatible with PPDB schema and it should contain
         all fields that have no default values in the schema.
         """
-        schema = l1dbschema.make_minimal_dia_object_schema()
+        schema = make_minimal_dia_object_schema()
         return schema
 
     def _makeDiaObjects(self, sources, indices, dt):
@@ -527,10 +537,10 @@ class APProto(object):
     def _makeDiaSourceSchema(self):
         """Make afw.table schema for DiaSource.
 
-        Schema should be compatible with L1DB schema and it should contain
+        Schema should be compatible with PPDB schema and it should contain
         all fields that have no default values in the schema.
         """
-        schema = l1dbschema.make_minimal_dia_source_schema()
+        schema = make_minimal_dia_source_schema()
         return schema
 
     def _makeDiaSources(self, sources, indices, visit_id):
@@ -584,12 +594,12 @@ class APProto(object):
     def _makeDiaForcedSourceSchema(self):
         """Make afw.table schema for DiaForcedSource.
 
-        Schema should be compatible with L1DB schema and it should contain
+        Schema should be compatible with PPDB schema and it should contain
         all fields that have no default values in the schema.
         """
         schema = afwTable.Schema()
 
-        # L1DB-specific stuff
+        # PPDB-specific stuff
         schema.addField("diaObjectId", "L")
         schema.addField("ccdVisitId", "L")
         schema.addField("flags", "L")
