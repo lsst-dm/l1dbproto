@@ -31,7 +31,8 @@ from argparse import ArgumentParser
 import logging
 import sys
 
-from lsst.dax.ppdb import Ppdb, PpdbConfig, make_minimal_dia_object_schema, make_minimal_dia_source_schema
+from lsst.dax.ppdb import Ppdb, make_minimal_dia_object_schema, make_minimal_dia_source_schema
+from lsst.l1dbproto import L1dbprotoConfig
 
 
 def _configLogger(verbosity):
@@ -67,7 +68,7 @@ def main():
     # configure logging
     _configLogger(args.verbose)
 
-    config = PpdbConfig()
+    config = L1dbprotoConfig()
     if args.config:
         config.load(args.config)
 

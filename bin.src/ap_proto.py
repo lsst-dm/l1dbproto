@@ -38,8 +38,8 @@ import time
 import numpy
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
-from lsst.l1dbproto import constants, DIA, generators, geom
-from lsst.dax.ppdb import (Ppdb, PpdbConfig, make_minimal_dia_object_schema,
+from lsst.l1dbproto import L1dbprotoConfig, DIA, generators, geom
+from lsst.dax.ppdb import (Ppdb, make_minimal_dia_object_schema,
                            make_minimal_dia_source_schema, timer)
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
@@ -97,29 +97,6 @@ def _visitTimes(start_time, interval_sec, count):
             count -= 1
         dt += delta
 
-
-def _htm_indices(region):
-    """Generate a set of HTM indices covering specified field of view.
-
-    Parameters
-    ----------
-    region: `sphgeom.Region`
-        Region that needs to be indexed
-
-    Returns
-    -------
-    Sequence of ranges, range is a tuple (minHtmID, maxHtmID).
-    """
-
-    _LOG.debug('region: %s', region)
-    pixelator = HtmPixelization(constants.HTM_LEVEL)
-    indices = pixelator.envelope(region, constants.HTM_MAX_RANGES)
-    for irange in indices.ranges():
-        _LOG.debug('range: %s %s', pixelator.toString(irange[0]),
-                   pixelator.toString(irange[1]))
-
-    return indices.ranges()
-
 # def _utc_seconds(dt):
 #     """Convert datetime to POSIX seconds
 #     """
@@ -175,20 +152,21 @@ class APProto(object):
         # configure logging
         _configLogger(self.args.verbose)
 
+        self.config = L1dbprotoConfig()
+
     def run(self):
         """Run whole shebang.
         """
 
-        config = PpdbConfig()
         if self.args.config:
-            config.load(self.args.config)
+            self.config.load(self.args.config)
 
         if self.args.dump_config:
-            config.saveToStream(sys.stdout)
+            self.config.saveToStream(sys.stdout)
             return 0
 
         # instantiate db interface
-        db = Ppdb(config)
+        db = Ppdb(self.config)
 
         # Initialize starting values from database visits table
         last_visit = db.lastVisit()
@@ -203,7 +181,7 @@ class APProto(object):
 
         if self.args.divide > 1:
             _LOG.info("Will divide FOV into %dx%d regions", self.args.divide, self.args.divide)
-        _LOG.info("Max. number of ranges for pixelator: %d", constants.HTM_MAX_RANGES)
+        _LOG.info("Max. number of ranges for pixelator: %d", self.config.htm_max_ranges)
 
         # read sources file
         _LOG.info("Start loading variable sources from %r", self.args.sources_file)
@@ -244,13 +222,13 @@ class APProto(object):
                 decl = LonLat.latitudeOf(pointing_v).asDegrees()
 
                 # sphgeom.Circle opening angle is actually a half of opening angle
-                region = Circle(pointing_v, Angle(constants.FOV_rad/2))
+                region = Circle(pointing_v, Angle(self.config.FOV_rad/2))
 
                 _LOG.info("Pointing ra, decl = %s, %s; xyz = %s", ra, decl, pointing_xyz)
 
                 # Simulating difference image analysis
-                dia = DIA.DIA(pointing_xyz, constants.FOV_rad, var_sources,
-                              constants.N_FALSE_PER_VISIT + constants.N_TRANS_PER_VISIT)
+                dia = DIA.DIA(pointing_xyz, self.config.FOV_rad, var_sources,
+                              self.config.false_per_visit + self.config.transient_per_visit)
                 sources, indices = dia.makeSources()
                 _LOG.info("DIA generated %s sources", len(sources))
 
@@ -277,7 +255,7 @@ class APProto(object):
                 if self.args.divide > 1:
 
                     tiles = geom.make_square_tiles(
-                        constants.FOV_rad, self.args.divide, self.args.divide, pointing_v)
+                        self.config.FOV_rad, self.args.divide, self.args.divide, pointing_v)
 
                     # spawn subprocesses to handle individual tiles
                     children = []
@@ -357,7 +335,7 @@ class APProto(object):
         with timer.Timer(name+"Objects-read"):
 
             # determine indices that we need
-            ranges = _htm_indices(region)
+            ranges = self._htm_indices(region)
 
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
@@ -485,7 +463,7 @@ class APProto(object):
             sp = SpherePoint(v3d)
 
             dir_v = UnitVector3d(v3d)
-            pixelator = HtmPixelization(constants.HTM_LEVEL)
+            pixelator = HtmPixelization(self.config.htm_level)
             index = pixelator.index(dir_v)
 
             record = catalog.addNew()
@@ -575,7 +553,7 @@ class APProto(object):
             sp = SpherePoint(v3d)
 
             dir_v = UnitVector3d(v3d)
-            pixelator = HtmPixelization(constants.HTM_LEVEL)
+            pixelator = HtmPixelization(self.config.htm_level)
             index = pixelator.index(dir_v)
 
             self.lastSourceId += 1
@@ -632,6 +610,28 @@ class APProto(object):
             record.set("flags", 0)
 
         return catalog
+
+    def _htm_indices(self, region):
+        """Generate a set of HTM indices covering specified field of view.
+
+        Parameters
+        ----------
+        region: `sphgeom.Region`
+            Region that needs to be indexed
+
+        Returns
+        -------
+        Sequence of ranges, range is a tuple (minHtmID, maxHtmID).
+        """
+
+        _LOG.debug('region: %s', region)
+        pixelator = HtmPixelization(self.config.htm_level)
+        indices = pixelator.envelope(region, self.config.htm_max_ranges)
+        for irange in indices.ranges():
+            _LOG.debug('range: %s %s', pixelator.toString(irange[0]),
+                       pixelator.toString(irange[1]))
+
+        return indices.ranges()
 
 
 #
