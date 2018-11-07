@@ -225,8 +225,8 @@ def _end_visit(line):
 _dispatch = [("Start processing visit", _new_visit),
              (" row count: ", _parse_counts),
              (": real=", _parse_timers),
-             ("ap_proto: database found ", _parse_select_count),
-             ("ap_proto: after filtering ", _parse_select_count),
+             (" database found ", _parse_select_count),
+             (" after filtering ", _parse_select_count),
              ("Finished processing visit", _end_visit),  # must be last
              ]
 

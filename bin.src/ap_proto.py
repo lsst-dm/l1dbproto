@@ -203,6 +203,7 @@ class APProto(object):
 
         if self.args.divide > 1:
             _LOG.info("Will divide FOV into %dx%d regions", self.args.divide, self.args.divide)
+        _LOG.info("Max. number of ranges for pixelator: %d", constants.HTM_MAX_RANGES)
 
         # read sources file
         _LOG.info("Start loading variable sources from %r", self.args.sources_file)
