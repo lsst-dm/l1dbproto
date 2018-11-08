@@ -67,17 +67,6 @@ def _configLogger(verbosity):
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
 
-_dt_format = ('%Y-%m-%d %H:%M:%S', 'YYYY-MM-DD hh:mm:ss')
-
-
-def _timeParse(dt_str):
-    """
-    Convert string to datetime object.
-    """
-    dt = datetime.strptime(dt_str, _dt_format[0])
-    return dt
-
-
 def _isDayTime(dt):
     """
     Returns true if time is not good for observing.
@@ -125,26 +114,12 @@ class APProto(object):
                             help='More verbose output, can use several times.')
         parser.add_argument('-n', '--num-visits', type=int, default=1, metavar='NUMBER',
                             help='Numer of visits to process, def: 1')
-        parser.add_argument('-i', '--interval', type=int, default=45, metavar='SECONDS',
-                            help='Interval between visits in seconds, def: 45')
         parser.add_argument('-c', '--config', default=None, metavar='PATH',
                             help='Name of the database config file (pex.config)')
         parser.add_argument('-d', '--dump-config', default=False, action="store_true",
                             help='Dump configuration to standard output and quit.')
         parser.add_argument('-U', '--no-update', default=False, action='store_true',
                             help='DO not update database, only reading is performed.')
-        parser.add_argument('--start-time', type=_timeParse, default=None,
-                            help='Starting time, format: ' + _dt_format[1] +
-                            '. Time is assumed to be in UTC time zone. Used only at'
-                            ' first invocation to intialize database.')
-        parser.add_argument('--start-visit-id', type=int, default=1,
-                            help='Starting visit ID. Used only at first invocation'
-                            ' to intialize database. def: 1')
-        parser.add_argument('--divide', type=int, default=0, metavar='NUM',
-                            help='Divide FOV into NUM*NUM tiles for parallel processing')
-        parser.add_argument('--sources-region', default=False, action='store_true',
-                            help='Use region-based select for DiaSource')
-        parser.add_argument('sources_file', help='Name of input file with sources')
 
         # parse options
         self.args = parser.parse_args(argv)
@@ -170,22 +145,20 @@ class APProto(object):
 
         # Initialize starting values from database visits table
         last_visit = db.lastVisit()
-        if last_visit is None:
-            # database is empty
-            if self.args.start_time is None:
-                _LOG.error('Database is not initialized, --start-time option is required')
-                return 1
+        if last_visit is not None:
+            start_visit_id = last_visit.visitId + 1
+            start_time = last_visit.visitTime + timedelta(seconds=self.config.interval)
         else:
-            self.args.start_visit_id = last_visit.visitId + 1
-            self.args.start_time = last_visit.visitTime + timedelta(seconds=self.args.interval)
+            start_visit_id = self.config.start_visit_id
+            start_time = self.config.start_time_dt
 
-        if self.args.divide > 1:
-            _LOG.info("Will divide FOV into %dx%d regions", self.args.divide, self.args.divide)
+        if self.config.divide > 1:
+            _LOG.info("Will divide FOV into %dx%d regions", self.config.divide, self.config.divide)
         _LOG.info("Max. number of ranges for pixelator: %d", self.config.htm_max_ranges)
 
         # read sources file
-        _LOG.info("Start loading variable sources from %r", self.args.sources_file)
-        var_sources = numpy.load(self.args.sources_file)
+        _LOG.info("Start loading variable sources from %r", self.config.sources_file)
+        var_sources = numpy.load(self.config.sources_file)
         _LOG.info("Finished loading variable sources, count = %s", len(var_sources))
 
         # diaObjectId for last new DIA object, for variable sources we use their
@@ -203,8 +176,8 @@ class APProto(object):
         _LOG.info("lastSourceId: %s", self.lastSourceId)
 
         # loop over visits
-        visitTimes = _visitTimes(self.args.start_time, self.args.interval, self.args.num_visits)
-        for visit_id, dt in enumerate(visitTimes, self.args.start_visit_id):
+        visitTimes = _visitTimes(start_time, self.config.interval, self.args.num_visits)
+        for visit_id, dt in enumerate(visitTimes, start_visit_id):
 
             if visit_id % 1000 == 0:
                 _LOG.info(COLOR_YELLOW + "+++ Start daily activities" + COLOR_RESET)
@@ -252,10 +225,10 @@ class APProto(object):
 
             with timer.Timer("VisitProcessing"):
 
-                if self.args.divide > 1:
+                if self.config.divide > 1:
 
                     tiles = geom.make_square_tiles(
-                        self.config.FOV_rad, self.args.divide, self.args.divide, pointing_v)
+                        self.config.FOV_rad, self.config.divide, self.config.divide, pointing_v)
 
                     # spawn subprocesses to handle individual tiles
                     children = []
@@ -363,7 +336,7 @@ class APProto(object):
         with timer.Timer(name+"Source-read"):
 
             latest_objects_ids = [obj['id'] for obj in latest_objects]
-            if self.args.sources_region:
+            if self.config.sources_region:
                 read_srcs = db.getDiaSourcesInRegion(ranges, dt)
             else:
                 read_srcs = db.getDiaSources(latest_objects_ids, dt)

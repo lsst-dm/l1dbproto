@@ -24,6 +24,7 @@
 
 __all__ = ["L1dbprotoConfig"]
 
+import datetime
 import math
 
 from lsst.dax.ppdb import PpdbConfig
@@ -35,23 +36,49 @@ class L1dbprotoConfig(PpdbConfig):
     FOV_deg = Field(dtype=float,
                     doc="FOV in degrees",
                     default=3.5)
-
     transient_per_visit = Field(dtype=int,
                                 doc="average number of transients per visit",
                                 default=100)
     false_per_visit = Field(dtype=int,
                             doc="average number of false positives per visit",
                             default=5050)
-
     htm_level = Field(dtype=int,
                       doc="HTM indexing level",
                       default=20)
     htm_max_ranges = Field(dtype=int,
                            doc="Max number of ranges in HTM envelope",
                            default=64)
+    divide = Field(dtype=int,
+                   doc="Divide FOV into NUM*NUM tiles for parallel processing",
+                   default=1)
+    interval = Field(dtype=int,
+                     doc='Interval between visits in seconds, def: 45',
+                     default=45)
+    sources_region = Field(dtype=bool,
+                           default=False,
+                           doc='Use region-based select for DiaSource')
+    start_time = Field(dtype=str,
+                       default="2020-01-01 03:00:00",
+                       doc=('Starting time, format: YYYY-MM-DD hh:mm:ss'
+                            '. Time is assumed to be in UTC time zone. Used only at'
+                            ' first invocation to intialize database.'))
+    start_visit_id = Field(dtype=int,
+                           default=1,
+                           doc='Starting visit ID. Used only at first invocation'
+                           ' to intialize database.')
+    sources_file = Field(dtype=str,
+                         doc='Name of input file with sources (numpy data)',
+                         default="var_sources.npy")
 
     @property
     def FOV_rad(self):
         """FOV in radians.
         """
         return self.FOV_deg * math.pi / 180
+
+    @property
+    def start_time_dt(self):
+        """start_time as datetime.
+        """
+        dt = datetime.datetime.strptime(self.start_time, '%Y-%m-%d %H:%M:%S')
+        return dt
