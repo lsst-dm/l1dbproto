@@ -35,6 +35,7 @@ import os
 import sys
 import time
 
+from mpi4py import MPI
 import numpy
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
@@ -143,6 +144,23 @@ class APProto(object):
         # instantiate db interface
         db = Ppdb(self.config)
 
+        if self.config.divide > 1:
+            # check that we have reasonable MPI setup
+            if self.config.mp_mode == "mpi":
+                comm = MPI.COMM_WORLD
+                num_proc = comm.Get_size()
+                rank = comm.Get_rank()
+                node = MPI.Get_processor_name()
+                _LOG.info(COLOR_YELLOW + "MPI job rank=%d size=%d, node %s" + COLOR_RESET,
+                          rank, num_proc, node)
+                num_tiles = self.config.divide**2
+                if num_proc != num_tiles:
+                    raise ValueError(f"Number of MPI processes ({num_proc}) "
+                                     f"does not match number of tiles ({num_tiles})")
+                if rank != 0:
+                    # run simple loop for all non-master processes
+                    return self.run_mpi_tile_loop(db, comm)
+
         # Initialize starting values from database visits table
         last_visit = db.lastVisit()
         if last_visit is not None:
@@ -213,7 +231,7 @@ class APProto(object):
 
             # print current database row counts, this takes long time
             # so only do it once in a while
-            if visit_id % 50 == 0:
+            if visit_id % 200 == 0:
                 counts = db.tableRowCount()
                 for tbl, count in sorted(counts.items()):
                     _LOG.info('%s row count: %s', tbl, count)
@@ -223,57 +241,142 @@ class APProto(object):
             # finish and don't influence our timers below.
             time.sleep(0.1)
 
-            with timer.Timer("VisitProcessing"):
+            if self.config.divide == 1:
 
-                if self.config.divide > 1:
+                # do it in-process
+                with timer.Timer("VisitProcessing"):
+                    self.visit(db, visit_id, dt, region, sources, indices)
+
+            else:
+
+                if self.config.mp_mode == "fork":
 
                     tiles = geom.make_square_tiles(
                         self.config.FOV_rad, self.config.divide, self.config.divide, pointing_v)
 
-                    # spawn subprocesses to handle individual tiles
-                    children = []
+                    with timer.Timer("VisitProcessing"):
+                        # spawn subprocesses to handle individual tiles
+                        children = []
+                        for ix, iy, region in tiles:
+
+                            # make sure lastSourceId is unique in in each process
+                            self.lastSourceId += len(sources)
+                            tile = (ix, iy)
+
+                            pid = os.fork()
+                            if pid == 0:
+                                # child
+
+                                self.visit(db, visit_id, dt, region, sources, indices, tile)
+                                # stop here
+                                sys.exit(0)
+
+                            else:
+                                _LOG.debug("Forked process %d for tile %s", pid, tile)
+                                children.append(pid)
+
+                        # wait until all children finish
+                        for pid in children:
+                            try:
+                                pid, status = os.waitpid(pid, 0)
+                                if status != 0:
+                                    _LOG.warning(COLOR_RED + "Child process PID=%s failed: %s" +
+                                                 COLOR_RESET, pid, status)
+                            except OSError as exc:
+                                _LOG.warning(COLOR_RED + "wait failed for PID=%s: %s" +
+                                             COLOR_RESET, pid, exc)
+
+                elif self.config.mp_mode == "mpi":
+
+                    tiles = geom.make_square_tiles(
+                        self.config.FOV_rad, self.config.divide, self.config.divide, pointing_v, False)
+                    _LOG.info("Split FOV into %d tiles for MPI", len(tiles))
+
+                    # spawn subprocesses to handle individual tiles, special
+                    # care needed for self.lastSourceId because it's
+                    # propagated back from (0, 0)
+                    lastSourceId = self.lastSourceId
+                    tile_data = []
                     for ix, iy, region in tiles:
-
-                        # make sure lastSourceId is unique in in each process
-                        self.lastSourceId += len(sources)
+                        lastSourceId += len(sources)
                         tile = (ix, iy)
+                        tile_data += [(visit_id, dt, region, sources, indices, tile, lastSourceId)]
+                        # make sure lastSourceId is unique in in each process
 
-                        pid = os.fork()
-                        if pid == 0:
-                            # child
+                    with timer.Timer("VisitProcessing"):
+                        _LOG.info("Scatter sources to %d tile processes", len(tile_data))
+                        self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data)
+                    self.lastSourceId = lastSourceId
 
-                            self.visit(db, visit_id, dt, region, sources, indices, tile)
-                            # stop here
-                            sys.exit(0)
-
-                        else:
-                            _LOG.debug("Forked process %d for tile %s", pid, tile)
-                            children.append(pid)
-
-                    # wait until all children finish
-                    for pid in children:
-                        try:
-                            pid, status = os.waitpid(pid, 0)
-                            if status != 0:
-                                _LOG.warning(COLOR_RED + "Child process PID=%s failed: %s" +
-                                             COLOR_RESET, pid, status)
-                        except OSError as exc:
-                            _LOG.warning(COLOR_RED + "wait failed for PID=%s: %s" +
-                                         COLOR_RESET, pid, exc)
-
-                else:
-
-                    # do it in-process
-                    self.visit(db, visit_id, dt, region, sources, indices)
-
-                if not self.args.no_update:
-                    # store last visit info
-                    db.saveVisit(visit_id, dt)
+            if not self.args.no_update:
+                # store last visit info
+                db.saveVisit(visit_id, dt)
 
             _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" +
                       COLOR_RESET, visit_id, loop_timer)
 
+        # stop MPI slaves
+        if self.config.divide > 1 and self.config.mp_mode == "mpi":
+            _LOG.info("Stopping MPI tile processes")
+            tile_data = [None] * self.config.divide**2
+            self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data)
+
         return 0
+
+    def run_mpi_tile_loop(self, db, comm):
+        """This is the method executing visit loop inside non-master MPI process
+        """
+        while self.run_mpi_tile(db, comm):
+            pass
+
+    def run_mpi_tile(self, db, comm, tile_data=None):
+        """This is the method executed by each MPI tile process for a single
+        visit.
+
+        Parameters
+        ----------
+        comm : `MPI.Comm`
+            MPI communicator
+        tile_data : `list`, optional
+            Data to scatter to tile processes, only used for single sending
+            process (with rank=0). Size of the list must be equal to the
+            number of processes in communicator. To signal the end of
+            processing list should contain None for each element.
+
+        Returns
+        -------
+        For rank=0 process this returns a list of data gathered from each
+        tile process. For other tile processes it returns True. When
+        `tile_data` contains all `None` then None is returned to all
+        processes.
+        """
+        _LOG.debug("MPI rank %d scatter with %r", comm.Get_rank(), tile_data)
+        tile_data = comm.scatter(tile_data, root=0)
+        _LOG.debug("MPI rank %d scatter returned %r", comm.Get_rank(), tile_data)
+        if tile_data is None:
+            # this signals stop running
+            return None
+        else:
+            visit_id, dt, region, sources, indices, tile, lastSourceId = tile_data
+            self.lastSourceId = lastSourceId
+            _LOG.info(COLOR_MAGENTA + "+++ Start processing visit %s tile %s at %s" + COLOR_RESET,
+                      visit_id, tile, dt)
+            loop_timer = timer.Timer().start()
+            try:
+                self.visit(db, visit_id, dt, region, sources, indices, tile)
+            except Exception as exc:
+                _LOG.error("Exception in visit processing: %s", exc, exc_info=True)
+            _LOG.info(COLOR_CYAN + "--- Finished processing visit %s tile %s, time: %s" +
+                      COLOR_RESET, visit_id, tile, loop_timer)
+            # TODO: send something more useful?
+            data = comm.gather(True, root=0)
+            _LOG.debug("Tile %s gather returned %r", tile, data)
+            if data is None:
+                # non-root
+                return True
+            else:
+                # return gathered data to root
+                return data
 
     def visit(self, db, visit_id, dt, region, sources, indices, tile=None):
         """AP processing of a single visit (with known sources)

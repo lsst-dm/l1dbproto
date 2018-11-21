@@ -28,7 +28,7 @@ import datetime
 import math
 
 from lsst.dax.ppdb import PpdbConfig
-from lsst.pex.config import Field
+from lsst.pex.config import Field, ChoiceField
 
 
 class L1dbprotoConfig(PpdbConfig):
@@ -69,6 +69,10 @@ class L1dbprotoConfig(PpdbConfig):
     sources_file = Field(dtype=str,
                          doc='Name of input file with sources (numpy data)',
                          default="var_sources.npy")
+    mp_mode = ChoiceField(dtype=str,
+                          allowed=dict(fork="Forking mode", mpi="MPI mode"),
+                          doc='multiprocessing mode, only for `divide > 1`',
+                          default="fork")
 
     @property
     def FOV_rad(self):

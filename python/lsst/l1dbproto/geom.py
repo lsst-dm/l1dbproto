@@ -55,7 +55,7 @@ def rotation_matrix(a, b):
     return R
 
 
-def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.])):
+def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.]), exclude_disjoint=True):
     """Generate mosaic of square tiles covering round patch of sky.
 
     Returns the list of tiles, each tile is represented by a tuple containg
@@ -72,6 +72,9 @@ def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.])):
         number of divisions in "y" axis
     direction:
         XYZ vector of the cone axis, must be numpy array
+    exclude_disjoint : `bool`, optional
+        If `True` (default) then do not include tiles which have no overlap
+        with FOV.
 
     Returns
     -------
@@ -113,7 +116,7 @@ def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.])):
             # make a tile and check that it overlaps with cone
             tile = sph.ConvexPolygon([c00, c01, c11, c10])
             relation = cone.relate(tile)
-            if not relation & sph.DISJOINT:
+            if not relation & sph.DISJOINT or not exclude_disjoint:
                 tiles.append((ix, iy, tile))
 
     return tiles
