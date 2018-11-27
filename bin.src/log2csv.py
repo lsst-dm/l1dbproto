@@ -28,6 +28,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 import gzip
 import logging
+import re
 import sys
 
 
@@ -151,7 +152,7 @@ def _parse_timers(line):
     elif " VisitProcessing: " in line:
         _values['visit_proc_real'] += real
         _values['visit_proc_cpu'] += cpu
-    elif " Finished processing visit " in line:
+    elif " Finished processing visit " in line and " tile " not in line:
         _values['visit_real'] += real
         _values['visit_cpu'] += cpu
 
@@ -222,18 +223,18 @@ def _end_visit(line):
 
 
 # Map line sibstring to method
-_dispatch = [("Start processing visit", _new_visit),
-             (" row count: ", _parse_counts),
-             (": real=", _parse_timers),
-             (" database found ", _parse_select_count),
-             (" after filtering ", _parse_select_count),
-             ("Finished processing visit", _end_visit),  # must be last
+_dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
+             (re.compile(" row count: "), _parse_counts),
+             (re.compile(": real="), _parse_timers),
+             (re.compile(" database found "), _parse_select_count),
+             (re.compile(" after filtering "), _parse_select_count),
+             (re.compile(r"Finished processing visit \d+, (?!tile)"), _end_visit),  # must be last
              ]
 
 
-_daily_dispatch = [("Start processing visit", _new_visit),
-                   (": real=", _parse_timers),
-                   ("Done with daily activities", _end_visit),  # must be last
+_daily_dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
+                   (re.compile(": real="), _parse_timers),
+                   (re.compile("Done with daily activities"), _end_visit),  # must be last
                    ]
 
 
@@ -283,7 +284,7 @@ def main():
         for line in input:
             for match, method in dispatch:
                 # if line matches then call corresponding method
-                if match in line:
+                if match.search(line):
                     method(line)
 
 
