@@ -15,3 +15,4 @@ tests/.tests
 pytest_session.txt
 python/lsst/l1dbproto/version.py
 /bin/
+.pytest_cache/

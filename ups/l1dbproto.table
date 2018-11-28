@@ -1,4 +1,6 @@
 setupRequired(afw)
+setupRequired(dax_ppdb)
+setupRequired(mpi4py)
 setupRequired(python)
 setupRequired(scons)
 setupRequired(sconsUtils)

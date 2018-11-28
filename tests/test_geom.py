@@ -70,6 +70,9 @@ class TestGeom(unittest.TestCase):
         tiles = geom.make_square_tiles(3.5 * math.pi / 180, 8, 8)
         self.assertEqual(len(tiles), 60)
 
+        tiles = geom.make_square_tiles(3.5 * math.pi / 180, 8, 8, exclude_disjoint=False)
+        self.assertEqual(len(tiles), 64)
+
 
 #
 #  run unit tests when imported as a main module
