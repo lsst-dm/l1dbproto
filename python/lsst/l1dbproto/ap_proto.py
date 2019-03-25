@@ -231,7 +231,8 @@ class APProto(object):
 
             # print current database row counts, this takes long time
             # so only do it once in a while
-            if visit_id % 200 == 0:
+            modu = 200 if visit_id <= 10000 else 1000
+            if visit_id % modu == 0:
                 counts = db.tableRowCount()
                 for tbl, count in sorted(counts.items()):
                     _LOG.info('%s row count: %s', tbl, count)
