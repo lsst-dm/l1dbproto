@@ -37,6 +37,7 @@ import time
 
 from mpi4py import MPI
 import numpy
+import pandas
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
@@ -121,6 +122,8 @@ class APProto(object):
                             help='Dump configuration to standard output and quit.')
         parser.add_argument('-U', '--no-update', default=False, action='store_true',
                             help='DO not update database, only reading is performed.')
+        parser.add_argument('-p', '--pandas', default=False, action='store_true',
+                            help='Retrieve and input pandas.')
 
         # parse options
         self.args = parser.parse_args(argv)
@@ -416,12 +419,22 @@ class APProto(object):
 
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(ranges)
+            latest_objects = db.getDiaObjects(ranges, return_pandas=self.args.pandas)
             _LOG.info(name+'database found %s objects', len(latest_objects))
 
             # filter database obects to a mask
             latest_objects = self._filterDiaObjects(latest_objects, region)
             _LOG.info(name+'after filtering %s objects', len(latest_objects))
+
+        if self.args.pandas:
+            # Retrieve DiaObjects (latest versions) from database for matching,
+            # this will produce wider coverage so further filtering is needed
+            latest_objects = db.getDiaObjects(ranges)
+            # _LOG.info(name+'database found %s objects', len(latest_objects))
+
+            # filter database obects to a mask
+            latest_objects = self._filterDiaObjects(latest_objects, region)
+            # _LOG.info(name+'after filtering %s objects', len(latest_objects))
 
         with timer.Timer(name+"S2O-matching"):
 
@@ -437,16 +450,31 @@ class APProto(object):
             # make forced sources for every object
             fsrcs = self._makeDiaForcedSources(objects, visit_id)
 
+            if self.args.pandas:
+                objects = self._convert_to_pandas(objects,
+                                                  {"id": "diaObjectId",
+                                                   "coord_ra": "ra",
+                                                   "coord_dec": "decl"})
+                srcs = self._convert_to_pandas(srcs,
+                                               {"id": "diaObjectId",
+                                                "coord_ra": "ra",
+                                                "coord_dec": "decl",
+                                                "parent": "parentDiaSourceId"})
+                fsrcs = self._convert_to_pandas(fsrcs,
+                                                {"id": "diaObjectId",
+                                                 "coord_ra": "ra",
+                                                 "coord_dec": "decl"})
+
         with timer.Timer(name+"Source-read"):
 
             latest_objects_ids = [obj['id'] for obj in latest_objects]
             if self.config.sources_region:
-                read_srcs = db.getDiaSourcesInRegion(ranges, dt)
+                read_srcs = db.getDiaSourcesInRegion(ranges, dt, return_pandas=self.args.pandas)
             else:
-                read_srcs = db.getDiaSources(latest_objects_ids, dt)
+                read_srcs = db.getDiaSources(latest_objects_ids, dt, return_pandas=self.args.pandas)
             _LOG.info(name+'database found %s sources', len(read_srcs or []))
 
-            read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
+            read_srcs = db.getDiaForcedSources(latest_objects_ids, dt, return_pandas=self.args.pandas)
             _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
 
         if not self.args.no_update:
@@ -473,7 +501,7 @@ class APProto(object):
 
         Parameters
         ----------
-        latest_objects : `afw.table.BaseCatalog`
+        latest_objects : `afw.table.BaseCatalog` ro `pandas.DataFrame`
             Catalog containing DiaObject records
         region : `sphgem.Region`
 
@@ -483,6 +511,16 @@ class APProto(object):
         in the region.
         """
         mask = numpy.ndarray(len(latest_objects), dtype=bool)
+        if isinstance(latest_objects, pandas.DataFrame):
+            for i, (ra, decl) in enumerate(zip(latest_objects["ra"], latest_objects["decl"])):
+                # TODO: For now we use PPDB units (degrees), will have to be changed
+                # in case we adopt afw units.
+                lonLat = LonLat.fromDegrees(ra, decl)
+                dir_obj = UnitVector3d(lonLat)
+                mask[i] = region.contains(dir_obj)
+
+            return latest_objects.mask(mask)
+
         for i, obj in enumerate(latest_objects):
             # TODO: For now we use PPDB units (degrees), will have to be changed
             # in case we adopt afw units.
@@ -709,6 +747,28 @@ class APProto(object):
                        pixelator.toString(irange[1]))
 
         return indices.ranges()
+
+    def _convert_to_pandas(self, catalog, column_map):
+        """Convert an input `lsst.afw.table.BaseCatalog` object o pandas.
+
+        Parameters
+        ----------
+        catalog : `lsst.afw.table.BaseCatalog`
+            Catalog to convert
+        column_map : `dict`
+            Input to output name mapping.
+
+        Returns
+        -------
+        output : `pandas.DataFrame`
+            Converted catalog.
+        """
+        df = catalog.asAstropy().to_pandas()
+        df.rename(column_map)
+        df["ra"] = numpy.degrees(df["ra"])
+        df["decl"] = numpy.degrees(df["decl"])
+
+        return df
 
 
 #
