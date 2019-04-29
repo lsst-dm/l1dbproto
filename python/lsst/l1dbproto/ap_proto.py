@@ -455,15 +455,13 @@ class APProto(object):
                                                   {"id": "diaObjectId",
                                                    "coord_ra": "ra",
                                                    "coord_dec": "decl"})
+                objects.drop(columns=["parent"], inplace=True) 
                 srcs = self._convert_to_pandas(srcs,
-                                               {"id": "diaObjectId",
+                                               {"id": "diaSourceId",
                                                 "coord_ra": "ra",
                                                 "coord_dec": "decl",
                                                 "parent": "parentDiaSourceId"})
-                fsrcs = self._convert_to_pandas(fsrcs,
-                                                {"id": "diaObjectId",
-                                                 "coord_ra": "ra",
-                                                 "coord_dec": "decl"})
+                fsrcs = self._convert_to_pandas(fsrcs)
 
         with timer.Timer(name+"Source-read"):
 
@@ -472,10 +470,16 @@ class APProto(object):
                 read_srcs = db.getDiaSourcesInRegion(ranges, dt, return_pandas=self.args.pandas)
             else:
                 read_srcs = db.getDiaSources(latest_objects_ids, dt, return_pandas=self.args.pandas)
-            _LOG.info(name+'database found %s sources', len(read_srcs or []))
+            if read_srcs is None:
+                _LOG.info(name+'database found %s sources', len([]))
+            else:
+                _LOG.info(name+'database found %s sources', len(read_srcs))
 
             read_srcs = db.getDiaForcedSources(latest_objects_ids, dt, return_pandas=self.args.pandas)
-            _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
+            if read_srcs is None:
+                _LOG.info(name+'database found %s forced sources', len([]))
+            else:
+                _LOG.info(name+'database found %s forced sources', len(read_srcs))
 
         if not self.args.no_update:
 
@@ -483,17 +487,17 @@ class APProto(object):
 
                 # store new versions of objects
                 _LOG.info(name+'will store %d Objects', len(objects))
-                if objects:
+                if len(objects) > 0:
                     db.storeDiaObjects(objects, dt)
 
                 # store all sources
                 _LOG.info(name+'will store %d Sources', len(srcs))
-                if srcs:
+                if len(srcs) > 0:
                     db.storeDiaSources(srcs)
 
                 # store all forced sources
                 _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
-                if fsrcs:
+                if len(fsrcs) > 0:
                     db.storeDiaForcedSources(fsrcs)
 
     def _filterDiaObjects(self, latest_objects, region):
@@ -519,7 +523,7 @@ class APProto(object):
                 dir_obj = UnitVector3d(lonLat)
                 mask[i] = region.contains(dir_obj)
 
-            return latest_objects.mask(mask)
+            return latest_objects[mask]
 
         for i, obj in enumerate(latest_objects):
             # TODO: For now we use PPDB units (degrees), will have to be changed
@@ -748,7 +752,7 @@ class APProto(object):
 
         return indices.ranges()
 
-    def _convert_to_pandas(self, catalog, column_map):
+    def _convert_to_pandas(self, catalog, column_map=None):
         """Convert an input `lsst.afw.table.BaseCatalog` object o pandas.
 
         Parameters
@@ -763,10 +767,13 @@ class APProto(object):
         output : `pandas.DataFrame`
             Converted catalog.
         """
+        if not catalog.isContiguous():
+            catalog = catalog.copy(deep=True)
         df = catalog.asAstropy().to_pandas()
-        df.rename(column_map)
-        df["ra"] = numpy.degrees(df["ra"])
-        df["decl"] = numpy.degrees(df["decl"])
+        if column_map is not None:
+            df.rename(columns=column_map, inplace=True)
+            df["ra"] = numpy.degrees(df["ra"])
+            df["decl"] = numpy.degrees(df["decl"])
 
         return df
 
