@@ -55,7 +55,8 @@ def rotation_matrix(a, b):
     return R
 
 
-def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.]), exclude_disjoint=True):
+def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.]),
+                      exclude_disjoint=True, rot_rad=None):
     """Generate mosaic of square tiles covering round patch of sky.
 
     Returns the list of tiles, each tile is represented by a tuple containg
@@ -75,6 +76,8 @@ def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.]), excl
     exclude_disjoint : `bool`, optional
         If `True` (default) then do not include tiles which have no overlap
         with FOV.
+    rot_rad : `float`, optional
+        Rotation angle in radians for camera around its axis.
 
     Returns
     -------
@@ -87,6 +90,12 @@ def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.]), excl
     R = rotation_matrix(np.array([0., 0., 1.]), direction)
     cone = sph.Circle(sph.UnitVector3d(float(direction[0]), float(direction[1]), float(direction[2])),
                       sph.Angle.fromRadians(half_open_angle))
+
+    if rot_rad is not None:
+        cam_rot = rotation_matrix(np.array([1., 0., 0.]),
+                                  np.array([math.cos(rot_rad), math.sin(rot_rad), 0.]))
+    else:
+        cam_rot = None
 
     # build mosaic at a plane perpendicular to z axis at z=+1
     half_height = math.tan(half_open_angle)
@@ -105,6 +114,8 @@ def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.]), excl
                                [x0, y1, 1.],
                                [x1, y0, 1.],
                                [x1, y1, 1.]])
+            if cam_rot is not None:
+                points = np.asarray(np.inner(points, cam_rot))
             points = np.asarray(np.inner(points, R))
 
             # make vectors, those normaliza internally
