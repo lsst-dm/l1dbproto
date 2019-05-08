@@ -40,7 +40,8 @@ import numpy
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
-from lsst.dax.apdb import (Apdb, make_minimal_dia_object_schema,
+from lsst.dax.apdb import (Apdb, ApdbConfig, ApdbCassandra, ApdbCassandraConfig,
+                           make_minimal_dia_object_schema,
                            make_minimal_dia_source_schema, timer)
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
@@ -113,10 +114,14 @@ class APProto(object):
         parser = ArgumentParser(description=descr)
         parser.add_argument('-v', '--verbose', dest='verbose', action='count', default=0,
                             help='More verbose output, can use several times.')
+        parser.add_argument('--backend', default="sql", choices=["sql", "cassandra"],
+                            help='Backend type, def: %(default)s')
         parser.add_argument('-n', '--num-visits', type=int, default=1, metavar='NUMBER',
                             help='Numer of visits to process, def: 1')
         parser.add_argument('-c', '--config', default=None, metavar='PATH',
-                            help='Name of the database config file (pex.config)')
+                            help='Name of the database config file (pex.config format)')
+        parser.add_argument('-a', '--app-config', default=None, metavar='PATH',
+                            help='Name of the ap_proto config file (pex.config format)')
         parser.add_argument('-d', '--dump-config', default=False, action="store_true",
                             help='Dump configuration to standard output and quit.')
         parser.add_argument('-U', '--no-update', default=False, action='store_true',
@@ -134,15 +139,29 @@ class APProto(object):
         """Run whole shebang.
         """
 
-        if self.args.config:
-            self.config.load(self.args.config)
+        # load configurations
+        if self.args.app_config:
+            self.config.load(self.args.app_config)
+
+        if self.args.backend == "sql":
+            self.dbconfig = ApdbConfig()
+            if self.args.config:
+                self.dbconfig.load(self.args.config)
+        elif self.args.backend == "cassandra":
+            self.dbconfig = ApdbCassandraConfig()
+            if self.args.config:
+                self.dbconfig.load(self.args.config)
 
         if self.args.dump_config:
             self.config.saveToStream(sys.stdout)
+            self.dbconfig.saveToStream(sys.stdout)
             return 0
 
         # instantiate db interface
-        db = Apdb(self.config)
+        if self.args.backend == "sql":
+            db = Apdb(config=self.dbconfig)
+        elif self.args.backend == "cassandra":
+            db = ApdbCassandra(config=self.dbconfig)
 
         if self.config.divide > 1:
             # check that we have reasonable MPI setup
