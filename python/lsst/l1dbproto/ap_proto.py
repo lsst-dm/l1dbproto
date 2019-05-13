@@ -677,6 +677,7 @@ class APProto(object):
         # APDB-specific stuff
         schema.addField("diaObjectId", "L")
         schema.addField("ccdVisitId", "L")
+        schema.addField("pixelId", "L")
         schema.addField("flags", "L")
 
         return schema
@@ -703,6 +704,7 @@ class APProto(object):
             record = catalog.addNew()
             record.set("diaObjectId", obj['id'])
             record.set("ccdVisitId", visit_id)
+            record.set("pixelId", obj['pixelId'])
             record.set("flags", 0)
 
         return catalog
