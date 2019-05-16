@@ -330,7 +330,7 @@ class APProto(object):
 
             if not self.args.no_update:
                 # store last visit info
-                db.saveVisit(visit_id, dt)
+                db.saveVisit(visit_id, dt, self.lastObjectId, self.lastSourceId)
 
             _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" +
                       COLOR_RESET, visit_id, loop_timer)
@@ -459,13 +459,10 @@ class APProto(object):
         with timer.Timer(name+"Source-read"):
 
             latest_objects_ids = [obj['id'] for obj in latest_objects]
-            if self.config.sources_region:
-                read_srcs = db.getDiaSourcesInRegion(ranges, dt)
-            else:
-                read_srcs = db.getDiaSources(latest_objects_ids, dt)
+            read_srcs = db.getDiaSources(ranges, latest_objects_ids, dt)
             _LOG.info(name+'database found %s sources', len(read_srcs or []))
 
-            read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
+            read_srcs = db.getDiaForcedSources(ranges, latest_objects_ids, dt)
             _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
 
         if not self.args.no_update:
@@ -480,12 +477,12 @@ class APProto(object):
                 # store all sources
                 _LOG.info(name+'will store %d Sources', len(srcs))
                 if srcs:
-                    db.storeDiaSources(srcs)
+                    db.storeDiaSources(srcs, dt)
 
                 # store all forced sources
                 _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
                 if fsrcs:
-                    db.storeDiaForcedSources(fsrcs)
+                    db.storeDiaForcedSources(fsrcs, dt)
 
     def _filterDiaObjects(self, latest_objects, region):
         """Filter out objects from a catalog which are outside region.
