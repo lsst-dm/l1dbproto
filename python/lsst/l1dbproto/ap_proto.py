@@ -40,7 +40,8 @@ import numpy
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
-from lsst.dax.ppdb import (Ppdb, make_minimal_dia_object_schema,
+from lsst.dax.ppdb import (Ppdb, PpdbConfig, PpdbCassandra, PpdbCassandraConfig,
+                           make_minimal_dia_object_schema,
                            make_minimal_dia_source_schema, timer)
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
@@ -113,10 +114,14 @@ class APProto(object):
         parser = ArgumentParser(description=descr)
         parser.add_argument('-v', '--verbose', dest='verbose', action='count', default=0,
                             help='More verbose output, can use several times.')
+        parser.add_argument('--backend', default="sql", choices=["sql", "cassandra"],
+                            help='Backend type, def: %(default)s')
         parser.add_argument('-n', '--num-visits', type=int, default=1, metavar='NUMBER',
                             help='Numer of visits to process, def: 1')
         parser.add_argument('-c', '--config', default=None, metavar='PATH',
-                            help='Name of the database config file (pex.config)')
+                            help='Name of the database config file (pex.config format)')
+        parser.add_argument('-a', '--app-config', default=None, metavar='PATH',
+                            help='Name of the ap_proto config file (pex.config format)')
         parser.add_argument('-d', '--dump-config', default=False, action="store_true",
                             help='Dump configuration to standard output and quit.')
         parser.add_argument('-U', '--no-update', default=False, action='store_true',
@@ -134,15 +139,29 @@ class APProto(object):
         """Run whole shebang.
         """
 
-        if self.args.config:
-            self.config.load(self.args.config)
+        # load configurations
+        if self.args.app_config:
+            self.config.load(self.args.app_config)
+
+        if self.args.backend == "sql":
+            self.dbconfig = PpdbConfig()
+            if self.args.config:
+                self.dbconfig.load(self.args.config)
+        elif self.args.backend == "cassandra":
+            self.dbconfig = PpdbCassandraConfig()
+            if self.args.config:
+                self.dbconfig.load(self.args.config)
 
         if self.args.dump_config:
             self.config.saveToStream(sys.stdout)
+            self.dbconfig.saveToStream(sys.stdout)
             return 0
 
         # instantiate db interface
-        db = Ppdb(self.config)
+        if self.args.backend == "sql":
+            db = Ppdb(config=self.dbconfig)
+        elif self.args.backend == "cassandra":
+            db = PpdbCassandra(config=self.dbconfig)
 
         if self.config.divide > 1:
             # check that we have reasonable MPI setup
@@ -311,7 +330,7 @@ class APProto(object):
 
             if not self.args.no_update:
                 # store last visit info
-                db.saveVisit(visit_id, dt)
+                db.saveVisit(visit_id, dt, self.lastObjectId, self.lastSourceId)
 
             _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" +
                       COLOR_RESET, visit_id, loop_timer)
@@ -440,13 +459,10 @@ class APProto(object):
         with timer.Timer(name+"Source-read"):
 
             latest_objects_ids = [obj['id'] for obj in latest_objects]
-            if self.config.sources_region:
-                read_srcs = db.getDiaSourcesInRegion(ranges, dt)
-            else:
-                read_srcs = db.getDiaSources(latest_objects_ids, dt)
+            read_srcs = db.getDiaSources(ranges, latest_objects_ids, dt)
             _LOG.info(name+'database found %s sources', len(read_srcs or []))
 
-            read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
+            read_srcs = db.getDiaForcedSources(ranges, latest_objects_ids, dt)
             _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
 
         if not self.args.no_update:
@@ -461,12 +477,12 @@ class APProto(object):
                 # store all sources
                 _LOG.info(name+'will store %d Sources', len(srcs))
                 if srcs:
-                    db.storeDiaSources(srcs)
+                    db.storeDiaSources(srcs, dt)
 
                 # store all forced sources
                 _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
                 if fsrcs:
-                    db.storeDiaForcedSources(fsrcs)
+                    db.storeDiaForcedSources(fsrcs, dt)
 
     def _filterDiaObjects(self, latest_objects, region):
         """Filter out objects from a catalog which are outside region.
@@ -658,6 +674,7 @@ class APProto(object):
         # PPDB-specific stuff
         schema.addField("diaObjectId", "L")
         schema.addField("ccdVisitId", "L")
+        schema.addField("pixelId", "L")
         schema.addField("flags", "L")
 
         return schema
@@ -684,6 +701,7 @@ class APProto(object):
             record = catalog.addNew()
             record.set("diaObjectId", obj['id'])
             record.set("ccdVisitId", visit_id)
+            record.set("pixelId", obj['pixelId'])
             record.set("flags", 0)
 
         return catalog
