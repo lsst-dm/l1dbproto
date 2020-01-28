@@ -31,7 +31,7 @@ from argparse import ArgumentParser
 import logging
 import sys
 
-from lsst.dax.ppdb import (Ppdb, PpdbConfig, PpdbCassandra, PpdbCassandraConfig,
+from lsst.dax.apdb import (Apdb, ApdbConfig, ApdbCassandra, ApdbCassandraConfig,
                            make_minimal_dia_object_schema, make_minimal_dia_source_schema)
 
 
@@ -58,7 +58,7 @@ def main():
                         help='Drop existing schema first, this will delete '
                         'all data in the tables, use with extreme caution')
     parser.add_argument('-c', '--config', default=None, metavar='PATH',
-                        help='Name of the PPDB config file (pex.config format)')
+                        help='Name of the APDB config file (pex.config format)')
     parser.add_argument('-t', '--tablespace', default=None, metavar='TABLESPACE',
                         help='Name of the Oracle tablespace for new tables.')
     parser.add_argument('-i', '--iot', default=False,
@@ -78,7 +78,7 @@ def main():
                            DiaSource=make_minimal_dia_source_schema())
 
     if args.backend == "sql":
-        config = PpdbConfig()
+        config = ApdbConfig()
         if args.config:
             config.load(args.config)
         if args.dump_config:
@@ -86,11 +86,11 @@ def main():
             return 0
 
         # instantiate db interface
-        db = Ppdb(config=config, afw_schemas=afw_schemas)
+        db = Apdb(config=config, afw_schemas=afw_schemas)
 
     elif args.backend == "cassandra":
 
-        config = PpdbCassandraConfig()
+        config = ApdbCassandraConfig()
         if args.config:
             config.load(args.config)
         if args.dump_config:
@@ -98,7 +98,7 @@ def main():
             return 0
 
         # instantiate db interface
-        db = PpdbCassandra(config=config, afw_schemas=afw_schemas)
+        db = ApdbCassandra(config=config, afw_schemas=afw_schemas)
 
     # do it
     db.makeSchema(drop=args.drop, oracle_tablespace=args.tablespace, oracle_iot=args.iot)

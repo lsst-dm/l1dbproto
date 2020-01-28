@@ -6,11 +6,11 @@ config.log
 *.pyc
 *.cfgc
 *.gz
-/ppdb-*.py
+/apdb-*.py
 /test*.py
 /log*
 /var_sources.npy
-/ppdb*.db*
+/apdb*.db*
 tests/.tests
 pytest_session.txt
 python/lsst/l1dbproto/version.py
