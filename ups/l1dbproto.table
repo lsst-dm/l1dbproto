@@ -1,5 +1,5 @@
 setupRequired(afw)
-setupRequired(dax_ppdb)
+setupRequired(dax_apdb)
 setupRequired(mpi4py)
 setupRequired(python)
 setupRequired(scons)

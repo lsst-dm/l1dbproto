@@ -40,7 +40,7 @@ import numpy
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
-from lsst.dax.ppdb import (Ppdb, make_minimal_dia_object_schema,
+from lsst.dax.apdb import (Apdb, make_minimal_dia_object_schema,
                            make_minimal_dia_source_schema, timer)
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
 
@@ -142,7 +142,7 @@ class APProto(object):
             return 0
 
         # instantiate db interface
-        db = Ppdb(self.config)
+        db = Apdb(self.config)
 
         if self.config.divide > 1:
             # check that we have reasonable MPI setup
@@ -484,7 +484,7 @@ class APProto(object):
         """
         mask = numpy.ndarray(len(latest_objects), dtype=bool)
         for i, obj in enumerate(latest_objects):
-            # TODO: For now we use PPDB units (degrees), will have to be changed
+            # TODO: For now we use APDB units (degrees), will have to be changed
             # in case we adopt afw units.
             lonLat = LonLat.fromRadians(obj['coord_ra'].asRadians(), obj['coord_dec'].asRadians())
             dir_obj = UnitVector3d(lonLat)
@@ -495,7 +495,7 @@ class APProto(object):
     def _makeDiaObjectSchema(self):
         """Make afw.table schema for DiaObjects.
 
-        Schema should be compatible with PPDB schema and it should contain
+        Schema should be compatible with APDB schema and it should contain
         all fields that have no default values in the schema.
         """
         schema = make_minimal_dia_object_schema()
@@ -593,7 +593,7 @@ class APProto(object):
     def _makeDiaSourceSchema(self):
         """Make afw.table schema for DiaSource.
 
-        Schema should be compatible with PPDB schema and it should contain
+        Schema should be compatible with APDB schema and it should contain
         all fields that have no default values in the schema.
         """
         schema = make_minimal_dia_source_schema()
@@ -650,12 +650,12 @@ class APProto(object):
     def _makeDiaForcedSourceSchema(self):
         """Make afw.table schema for DiaForcedSource.
 
-        Schema should be compatible with PPDB schema and it should contain
+        Schema should be compatible with APDB schema and it should contain
         all fields that have no default values in the schema.
         """
         schema = afwTable.Schema()
 
-        # PPDB-specific stuff
+        # APDB-specific stuff
         schema.addField("diaObjectId", "L")
         schema.addField("ccdVisitId", "L")
         schema.addField("flags", "L")
