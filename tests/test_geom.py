@@ -50,13 +50,13 @@ class TestGeom(unittest.TestCase):
         a = np.array([1., 0., 0.])
         b = np.array([0., 0., 1.])
         R = geom.rotation_matrix(a, b)
-        expected = np.matrix("0,0,-1;0,1,0;1,0,0", dtype=float)
+        expected = np.array([[0, 0, -1], [0, 1, 0], [1, 0, 0]], dtype=float)
         self.assertTrue(np.array_equal(R, expected))
 
         a = np.array([0., -1., 0.])
         b = np.array([0., 0., 1.])
         R = geom.rotation_matrix(a, b)
-        expected = np.matrix("1,0,0;0,0,1;0,-1,0", dtype=float)
+        expected = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=float)
         self.assertTrue(np.array_equal(R, expected))
 
     def test_make_square_tiles(self):

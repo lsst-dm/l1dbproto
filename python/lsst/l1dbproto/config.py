@@ -27,11 +27,11 @@ __all__ = ["L1dbprotoConfig"]
 import datetime
 import math
 
-from lsst.dax.ppdb import PpdbConfig
+from lsst.dax.apdb import ApdbConfig
 from lsst.pex.config import Field, ChoiceField
 
 
-class L1dbprotoConfig(PpdbConfig):
+class L1dbprotoConfig(ApdbConfig):
 
     FOV_deg = Field(dtype=float,
                     doc="FOV in degrees",
