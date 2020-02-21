@@ -658,6 +658,8 @@ class APProto(object):
             record.set("parent", 0)
             record.set("coord_ra", sp.getRa())
             record.set("coord_dec", sp.getDec())
+            record.set("psFlux", 1.)
+            record.set("psFluxErr", .01)
             record.set("flags", 0)
             record.set("pixelId", index)
 
