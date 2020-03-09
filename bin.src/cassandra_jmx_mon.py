@@ -12,20 +12,25 @@ from contextlib import closing
 import gzip
 import logging
 import math
-import threading
 import re
+import signal
 import socket
-import sys
 import time
 import yaml
 
 from javax.management.remote import JMXConnector, JMXConnectorFactory, JMXServiceURL
-from javax.management import MBeanServerConnection, MBeanInfo, ObjectName, RuntimeMBeanException
+from javax.management import ObjectName
 from java.lang import String
 from jarray import array
 
 
-_lock = threading.Lock()  # Jython has no GIL
+_stop = False
+
+
+def intHandler(signum, frame):
+    global _stop
+    _stop = True
+
 
 def _configLogger(verbosity):
     """ configure logging based on verbosity level """
@@ -35,7 +40,7 @@ def _configLogger(verbosity):
 
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
- 
+
 def main():
     parser = argparse.ArgumentParser(description="Dump JMX metrics to InfluxDB DML file")
     parser.add_argument('-v', '--verbose', action='count', default=0,
@@ -44,28 +49,34 @@ def main():
     parser.add_argument("-p", "--port", type=int, default=7199, help="Port number")
     parser.add_argument("-u", "--user", default=None, help="User name")
     parser.add_argument("-P", "--password", default=None, help="Password")
-    parser.add_argument("-r", "--period", default=60, type=int, help="Period in seconds.")
+    parser.add_argument("-r", "--period", default=60, type=int, help="Sampling period in seconds.")
     parser.add_argument("-o", "--output", default="cassandra_jmx_mon-{host}-{ts}.dat", help="Password")
+    parser.add_argument("-R", "--rotate-hours", default=None, type=int,
+                        help="Output file rotation period in hours, default is no rotation.")
     parser.add_argument("-C", "--compress", default=False, action="store_true", help="Compress output file.")
     parser.add_argument("-c", "--config", default="cassandra_jmx_mon.yaml",
                         help="YAML configuration file.")
     parser.add_argument("-D", "--database", default="ap_proto", help="Name of the InfluxDB database.")
     parser.add_argument("-H", "--host", default=socket.gethostname(), help="Add host name as a tag.")
     parser.add_argument("-d", "--dump", default=False, action="store_true",
-                        help="Dump full list of metrics and attributes")
+                        help="Dump full list of metrics and attributes and exit")
 
     args = parser.parse_args()
 
     # configure logging
     _configLogger(args.verbose)
 
+    # Set the signal handler
+    signal.signal(signal.SIGINT, intHandler)
+
     # connect to server
     environment = {}
     if args.user or args.password:
         credentials = array([args.user, args.password], String)
         environment = {JMXConnector.CREDENTIALS: credentials}
-    jmxServiceUrl = JMXServiceURL('service:jmx:rmi:///jndi/rmi://{}:{}/jmxrmi'.format(args.server, args.port));
-    jmxConnector = JMXConnectorFactory.connect(jmxServiceUrl, environment);
+    jmxServiceUrl = JMXServiceURL('service:jmx:rmi:///jndi/rmi://{}:{}/jmxrmi'.format(
+        args.server, args.port))
+    jmxConnector = JMXConnectorFactory.connect(jmxServiceUrl, environment)
 
     with closing(jmxConnector):
         conn = jmxConnector.getMBeanServerConnection()
@@ -75,19 +86,8 @@ def main():
             return
 
         config = _read_config(args.config)
-        output = args.output.format(ts=time.strftime("%Y%m%dT%H%M%S"), host=(args.host or ""))
+        _run(conn, config, args)
 
-        if args.compress:
-            output += ".gz"
-            out = gzip.open(output, "wb", 9)
-        else:
-            out = open(output, "w")
-        with closing(out):
-            logging.info("Writing output to file %s", output)
-            print("# DML", file=out)
-            print("# CONTEXT-DATABASE: {}".format(args.database), file=out)
-
-            _run(conn, config, args.period, args.host, out)
 
 def _dump(conn):
     """Dump full list of metrics,
@@ -132,7 +132,37 @@ def _read_config(yaml_path):
         cfg["attributes"] = re.compile(cfg.get("attributes", ".*"))
     return config
 
-def _run(conn, config, period, host, out):
+
+def _makeOutput(args):
+    """Open output file.
+
+    Parameters
+    ----------
+    args : `argparse.Namespace`
+        Parsed command line arguments
+
+    Returns
+    -------
+    file
+        File-like instance
+    """
+
+    output = args.output.format(ts=time.strftime("%Y%m%dT%H%M%S"), host=(args.host or ""))
+    if args.compress:
+        output += ".gz"
+        out = gzip.open(output, "wb", 9)
+    else:
+        out = open(output, "w")
+
+    logging.info("Writing output to file %s", output)
+
+    # write InfluxDB DML header
+    print("# DML", file=out)
+    print("# CONTEXT-DATABASE: {}".format(args.database), file=out)
+    return out
+
+
+def _run(conn, config, args):
     """Run monitoring loop until killed.
 
     Parameters
@@ -141,12 +171,8 @@ def _run(conn, config, period, host, out):
         server connection instance
     config : `dict`
         Configuration dictionary
-    period : `int`
-        Loop period in seconds
-    host : `str`
-        If not empty then add host name as a tag
-    out : `object`
-        File object to write output to.
+    args : `argparse.Namespace`
+        Parsed command line arguments
     """
 
     all_metrics = {}
@@ -169,22 +195,43 @@ def _run(conn, config, period, host, out):
                 all_attr += attributes
                 all_metrics[str(oname)] = all_attr
 
-    while True:
+    while not _stop:
 
-        now = time.time()
-        interval = int(now / period + 1) * period - now
-        logging.debug("sleep for %f sec", interval)
-        time.sleep(interval)
+        lastRotateTime = time.time()
+        out = _makeOutput(args)
+        try:
 
-        for oname, attributes in all_metrics.items():
-            now = time.time()
-            oname = ObjectName(oname)
-            values = conn.getAttributes(oname, attributes)
-            line = _attr2influx(oname, values, host)
-            if line:
-                ts = int(now*1e9)
-                with _lock:
-                    print(line, ts, file=out)
+            while not _stop:
+
+                nextCycle = int(time.time() / args.period + 1) * args.period
+                logging.debug("sleep for %f sec", nextCycle - time.time())
+                while time.time() < nextCycle:
+                    interval = min(0.1, nextCycle - time.time())
+                    time.sleep(interval)
+                    if _stop:
+                        break
+                if _stop:
+                    break
+
+                for oname, attributes in all_metrics.items():
+                    now = time.time()
+                    oname = ObjectName(oname)
+                    values = conn.getAttributes(oname, attributes)
+                    line = _attr2influx(oname, values, args.host)
+                    if line:
+                        ts = int(now*1e9)
+                        print(line, ts, file=out)
+
+                if args.rotate_hours is not None:
+                    # re-open output file after rotation period
+                    tdiff = time.time() - lastRotateTime
+                    if tdiff >= args.rotate_hours*3600:
+                        logging.debug("%f seconds since last rotation, re-opening output file", tdiff)
+                        break
+        finally:
+            logging.info("closing out: %s", out)
+            out.close()
+
 
 def _attr2influx(oname, values, host):
     """Convert object name and attribute values to line protocol
@@ -218,8 +265,5 @@ def _attr2influx(oname, values, host):
     return line
 
 
-
-
-
-if __name__=='__main__':
+if __name__ == '__main__':
     main()

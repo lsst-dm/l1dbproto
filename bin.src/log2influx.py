@@ -124,12 +124,14 @@ def _timestamp(line):
 _re_tile1 = re.compile(r" tile=(\d+)x(\d+) ")
 _re_tile2 = re.compile(r" tile \((\d+), (\d+)\)")
 
+
 def _tile(line):
     """Extract tile Id from a line"""
     m = _re_tile1.search(line) or _re_tile2.search(line)
     if m:
         return "{}x{}".format(*m.group(1, 2))
     return 'fov'
+
 
 def _new_visit(line):
     """Initialize data structures for new visit.
@@ -142,16 +144,17 @@ def _new_visit(line):
     visit = int(words[-4])
     ts = _timestamp(line)
     _context['visit'] = visit
-    #print(f"visit,tile='fov' start={visit} {ts}")
+    # print(f"visit,tile='fov' start={visit} {ts}")
     print(f"visit start={visit} {ts}")
 
 
 def _new_tile_visit(line):
-    words = line.split()
-    visit = int(words[-7])
-    ts = _timestamp(line)
-    tile = _tile(line)
-#    print(f"visit,tile='{tile}' start={visit} {ts}")
+    pass
+    # words = line.split()
+    # visit = int(words[-7])
+    # ts = _timestamp(line)
+    # tile = _tile(line)
+    # print(f"visit,tile='{tile}' start={visit} {ts}")
 
 
 def _parse_counts(line):
@@ -213,9 +216,9 @@ def _parse_timers(line):
         timer = "visit"
 
     if timer:
-        ts = _timestamp(line)
-        tile = _tile(line)
-        #print(f"timer,tile='{tile}',timer={timer} real={real},cpu={cpu} {ts}")
+        # ts = _timestamp(line)
+        # tile = _tile(line)
+        # print(f"timer,tile='{tile}',timer={timer} real={real},cpu={cpu} {ts}")
         _timers_real[timer] += real
         _timers_cpu[timer] += cpu
 
@@ -238,9 +241,29 @@ def _parse_select_count(line):
         key = "obj_filtered"
         value = int(words[-2])
     if key:
-        ts = _timestamp(line)
-        tile = _tile(line)
-        #print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
+        # ts = _timestamp(line)
+        # tile = _tile(line)
+        # print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
+        _counters[key] += value
+
+
+def _parse_queries_count(line):
+    """Parse line with counter of select queries"""
+    words = line.split()
+    key = None
+    if "getDiaObjects" in line:
+        key = "obj_queries"
+        value = int(words[-1])
+    elif "_getSources DiaSource" in line:
+        key = "src_queries"
+        value = int(words[-1])
+    elif "_getSources DiaForcedSource" in line:
+        key = "fsrc_queries"
+        value = int(words[-1])
+    if key:
+        # ts = _timestamp(line)
+        # tile = _tile(line)
+        # print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
         _counters[key] += value
 
 
@@ -258,9 +281,9 @@ def _parse_store_count(line):
         key = "obj_stored"
         value = int(words[-2])
     if key:
-        ts = _timestamp(line)
-        tile = _tile(line)
-        #print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
+        # ts = _timestamp(line)
+        # tile = _tile(line)
+        # print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
         _counters[key] += value
 
 
@@ -268,11 +291,11 @@ def _end_tile_visit(line):
     """
     Dump collected information
     """
-    visit = _context['visit']
-    ts = _timestamp(line)
-    tile = _tile(line)
-    real, cpu = _parse_timer(line)
-    #print(f"visit,tile='{tile}' end={visit},real={real},cpu={cpu} {ts}")
+    # visit = _context['visit']
+    # ts = _timestamp(line)
+    # real, cpu = _parse_timer(line)
+    # tile = _tile(line)
+    # print(f"visit,tile='{tile}' end={visit},real={real},cpu={cpu} {ts}")
 
 
 def _end_visit(line):
@@ -301,6 +324,7 @@ _dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
              (re.compile(r"Start processing visit \d+ tile"), _new_tile_visit),
              (re.compile(" row count: "), _parse_counts),
              (re.compile(": real="), _parse_timers),
+             (re.compile(": #queries: "), _parse_queries_count),
              (re.compile(" database found "), _parse_select_count),
              (re.compile(" after filtering "), _parse_select_count),
              (re.compile(" will store "), _parse_store_count),

@@ -4,13 +4,9 @@ metrics:
     attributes: .*
   - object: org.apache.cassandra.metrics:type=CQL,*
     attributes: .*
-  - object: org.apache.cassandra.metrics:type=Cache,scope=KeyCache,*
+  - object: org.apache.cassandra.metrics:type=Cache,*
     attributes: .*
-  - object: org.apache.cassandra.metrics:type=Cache,scope=RowCache,*
-    attributes: .*
-  - object: org.apache.cassandra.metrics:type=Cache,scope=ChunkCache,*
-    attributes: .*
-  - object: org.apache.cassandra.metrics:type=Client,name=connectedNativeClients
+  - object: org.apache.cassandra.metrics:type=Client,*
     attributes: .*
   - object: org.apache.cassandra.metrics:type=ClientRequest,*
     attributes: .*
@@ -18,11 +14,17 @@ metrics:
     attributes: .*
   - object: org.apache.cassandra.metrics:type=CommitLog,*
     attributes: .*
+  - object: org.apache.cassandra.metrics:type=Compaction,*
+    attributes: .*
   - object: org.apache.cassandra.metrics:type=Keyspace,keyspace=apdb,*
     attributes: .*
-  - object: org.apache.cassandra.metrics:type=Table,keyspace=apdb,scope=Dia*,name=*
+  - object: org.apache.cassandra.metrics:type=MemtablePool,*
     attributes: .*
-  - object: org.apache.cassandra.metrics:type=ThreadPools,path=request,*
+  - object: org.apache.cassandra.metrics:type=Table,keyspace=apdb,scope=Dia*,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=Table,name=*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=ThreadPools,*
     attributes: .*
   - object: java.lang:type=GarbageCollector,*
     attributes: CollectionCount|CollectionTime
