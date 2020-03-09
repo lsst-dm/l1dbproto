@@ -197,9 +197,8 @@ def _run(conn, config, args):
 
     while not _stop:
 
-        lastRotateTime = time.time()
-        out = _makeOutput(args)
-        try:
+        with closing(_makeOutput(args)) as out:
+            lastRotateTime = time.time()
 
             while not _stop:
 
@@ -228,9 +227,6 @@ def _run(conn, config, args):
                     if tdiff >= args.rotate_hours*3600:
                         logging.debug("%f seconds since last rotation, re-opening output file", tdiff)
                         break
-        finally:
-            logging.info("closing out: %s", out)
-            out.close()
 
 
 def _attr2influx(oname, values, host):

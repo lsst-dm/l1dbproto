@@ -10,8 +10,6 @@ metrics:
     attributes: .*
   - object: org.apache.cassandra.metrics:type=ClientRequest,*
     attributes: .*
-  - object: org.apache.cassandra.metrics:type=ColumnFamily,keyspace=apdb,scope=Dia*,*
-    attributes: .*
   - object: org.apache.cassandra.metrics:type=CommitLog,*
     attributes: .*
   - object: org.apache.cassandra.metrics:type=Compaction,*
