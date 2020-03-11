@@ -48,7 +48,10 @@ class L1dbprotoConfig(Config):
                            doc="Max number of ranges in HTM envelope",
                            default=64)
     divide = Field(dtype=int,
-                   doc="Divide FOV into NUM*NUM tiles for parallel processing",
+                   doc=("Divide FOV into NUM*NUM tiles for parallel processing. "
+                        "If negative means camera style tiling with 5x5 rafts "
+                        "each subdivided in both directions into negated value "
+                        "of this parameter."),
                    default=1)
     interval = Field(dtype=int,
                      doc='Interval between visits in seconds, def: 45',
@@ -56,6 +59,14 @@ class L1dbprotoConfig(Config):
     sources_region = Field(dtype=bool,
                            default=False,
                            doc='Use region-based select for DiaSource')
+    forced_cutoff_days = Field(dtype=int,
+                               doc=("Period after which we stop forced photometry "
+                                    "if there was no observed source, def: 30"),
+                               default=30)
+    make_forced_objects = Field(dtype=bool,
+                                doc=("Generate DiaObject for forced photometry even "
+                                     "when there is no observed source"),
+                                default=False)
     start_time = Field(dtype=str,
                        default="2020-01-01 03:00:00",
                        doc=('Starting time, format: YYYY-MM-DD hh:mm:ss'
@@ -70,7 +81,7 @@ class L1dbprotoConfig(Config):
                          default="var_sources.npy")
     mp_mode = ChoiceField(dtype=str,
                           allowed=dict(fork="Forking mode", mpi="MPI mode"),
-                          doc='multiprocessing mode, only for `divide > 1`',
+                          doc='multiprocessing mode, only for `divide > 1` or `divide < 0',
                           default="fork")
 
     @property

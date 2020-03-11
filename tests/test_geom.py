@@ -73,6 +73,31 @@ class TestGeom(unittest.TestCase):
         tiles = geom.make_square_tiles(3.5 * math.pi / 180, 8, 8, exclude_disjoint=False)
         self.assertEqual(len(tiles), 64)
 
+        tiles = geom.make_square_tiles(3.5 * math.pi / 180, 15, 15, exclude_disjoint=True)
+        self.assertEqual(len(tiles), 15*15 - 4*6)
+
+    def test_make_camera_tiles(self):
+
+        tiles = geom.make_camera_tiles(3.5 * math.pi / 180, 2)
+        self.assertEqual(len(tiles), 84)
+
+        tiles = geom.make_camera_tiles(3.5 * math.pi / 180, 3)
+        self.assertEqual(len(tiles), 189)
+        # check that corners are not there
+        for ix, iy, tile in tiles:
+            self.assertFalse(ix < 3 and iy < 3)
+            self.assertFalse(ix < 3 and iy >= 12)
+            self.assertFalse(ix >= 12 and iy < 3)
+            self.assertFalse(ix >= 12 and iy >= 12)
+
+    def test_make_tiles(self):
+
+        tiles = geom.make_tiles(3.5 * math.pi / 180, 2)
+        self.assertEqual(len(tiles), 4)
+
+        tiles = geom.make_tiles(3.5 * math.pi / 180, -2)
+        self.assertEqual(len(tiles), 84)
+
 
 #
 #  run unit tests when imported as a main module

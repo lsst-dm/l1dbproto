@@ -206,7 +206,8 @@ def _run(conn, config, args):
                 logging.debug("sleep for %f sec", nextCycle - time.time())
                 while time.time() < nextCycle:
                     interval = min(0.1, nextCycle - time.time())
-                    time.sleep(interval)
+                    if interval > 0:
+                        time.sleep(interval)
                     if _stop:
                         break
                 if _stop:
