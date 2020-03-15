@@ -163,7 +163,12 @@ class APProto(object):
         elif self.args.backend == "cassandra":
             db = ApdbCassandra(config=self.dbconfig)
 
-        if self.config.divide > 1:
+        num_tiles = 1
+        if self.config.divide != 1:
+
+            tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide)
+            num_tiles = len(tiles)
+
             # check that we have reasonable MPI setup
             if self.config.mp_mode == "mpi":
                 comm = MPI.COMM_WORLD
@@ -172,7 +177,6 @@ class APProto(object):
                 node = MPI.Get_processor_name()
                 _LOG.info(COLOR_YELLOW + "MPI job rank=%d size=%d, node %s" + COLOR_RESET,
                           rank, num_proc, node)
-                num_tiles = self.config.divide**2
                 if num_proc != num_tiles:
                     raise ValueError(f"Number of MPI processes ({num_proc}) "
                                      f"does not match number of tiles ({num_tiles})")
@@ -190,7 +194,7 @@ class APProto(object):
             start_time = self.config.start_time_dt
 
         if self.config.divide > 1:
-            _LOG.info("Will divide FOV into %dx%d regions", self.config.divide, self.config.divide)
+            _LOG.info("Will divide FOV into %d regions", num_tiles)
         _LOG.info("Max. number of ranges for pixelator: %d", self.config.htm_max_ranges)
 
         # read sources file
@@ -271,8 +275,7 @@ class APProto(object):
 
                 if self.config.mp_mode == "fork":
 
-                    tiles = geom.make_square_tiles(
-                        self.config.FOV_rad, self.config.divide, self.config.divide, pointing_v)
+                    tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
 
                     with timer.Timer("VisitProcessing"):
                         # spawn subprocesses to handle individual tiles
@@ -308,8 +311,7 @@ class APProto(object):
 
                 elif self.config.mp_mode == "mpi":
 
-                    tiles = geom.make_square_tiles(
-                        self.config.FOV_rad, self.config.divide, self.config.divide, pointing_v, False)
+                    tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
                     _LOG.info("Split FOV into %d tiles for MPI", len(tiles))
 
                     # spawn subprocesses to handle individual tiles, special
@@ -336,9 +338,9 @@ class APProto(object):
                       COLOR_RESET, visit_id, loop_timer)
 
         # stop MPI slaves
-        if self.config.divide > 1 and self.config.mp_mode == "mpi":
+        if num_tiles > 1 and self.config.mp_mode == "mpi":
             _LOG.info("Stopping MPI tile processes")
-            tile_data = [None] * self.config.divide**2
+            tile_data = [None] * num_tiles
             self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data)
 
         return 0
@@ -447,14 +449,11 @@ class APProto(object):
             # create all new DiaObjects
             objects = self._makeDiaObjects(sources, indices, dt)
 
-            # do forced photometry on non-detected objects (extends objects)
-            self._forcedPhotometry(objects, latest_objects, dt)
-
-            # Store all sources
+            # make all sources
             srcs = self._makeDiaSources(sources, indices, visit_id)
 
-            # make forced sources for every object
-            fsrcs = self._makeDiaForcedSources(objects, visit_id)
+            # do forced photometry (can extends objects)
+            fsrcs = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
 
         with timer.Timer(name+"Source-read"):
 
@@ -572,7 +571,7 @@ class APProto(object):
 
         return catalog
 
-    def _forcedPhotometry(self, objects, latest_objects, dt):
+    def _forcedPhotometry(self, objects, latest_objects, dt, visit_id):
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
@@ -583,28 +582,60 @@ class APProto(object):
             Catalog containing DiaObject records
         latest_objects : `afw.table.BaseCatalog`
             Catalog containing DiaObject records
+        dt : `datetime.datetime`
+            Visit time
+        visit_id : `int`
+            ID of the visit
+
+        Returns
+        -------
+        `afw.table.BaseCatalog`
         """
 
         # Ids of the detected objects
         ids = set(obj['id'] for obj in objects)
 
+        schema = self._makeDiaForcedSourceSchema()
+        catalog = afwTable.BaseCatalog(schema)
+
+        # do forced photometry for all detected DiaObjects
+        for obj in objects:
+
+            record = catalog.addNew()
+            record.set("diaObjectId", obj['id'])
+            record.set("ccdVisitId", visit_id)
+            record.set("pixelId", obj['pixelId'])
+            record.set("flags", 0)
+
+        # do forced photometry for non-detected DiaObjects (newer than cutoff)
         for obj in latest_objects:
-            # only do it for 30 days after last detection
             if obj['id'] in ids:
                 continue
+            # only do it for 30 days after last detection
             lastNonForcedSource = datetime.utcfromtimestamp(obj['lastNonForcedSource'])
             delta = dt - lastNonForcedSource
-            if delta > timedelta(days=30):
+            if delta > timedelta(days=self.config.forced_cutoff_days):
                 continue
 
-            record = objects.addNew()
-            record.set("id", obj['id'])
-            # record.set("validityStart", _utc_seconds(dt))
-            # record.set("validityEnd", 0)
-            # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
-            record.set("coord_ra", obj["coord_ra"])
-            record.set("coord_dec", obj["coord_dec"])
-            record.set("pixelId", obj["pixelId"])
+            record = catalog.addNew()
+            record.set("diaObjectId", obj['id'])
+            record.set("ccdVisitId", visit_id)
+            record.set("pixelId", obj['pixelId'])
+            record.set("flags", 0)
+
+            # optionally make new DiaObjects for all non-detected objects
+            if self.config.make_forced_objects:
+
+                record = objects.addNew()
+                record.set("id", obj['id'])
+                # record.set("validityStart", _utc_seconds(dt))
+                # record.set("validityEnd", 0)
+                # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
+                record.set("coord_ra", obj["coord_ra"])
+                record.set("coord_dec", obj["coord_dec"])
+                record.set("pixelId", obj["pixelId"])
+
+        return catalog
 
     def _makeDiaSourceSchema(self):
         """Make afw.table schema for DiaSource.
@@ -680,33 +711,6 @@ class APProto(object):
         schema.addField("flags", "L")
 
         return schema
-
-    def _makeDiaForcedSources(self, objects, visit_id):
-        """Generate catalog of DiaForcedSources to store in a database.
-
-        Parameters
-        ----------
-        objects : `afw.table.BaseCatalog`
-            Catalog containing DiaObject records
-        visit_id : `int`
-            ID of the visit
-
-        Returns
-        -------
-        `afw.table.BaseCatalog`
-        """
-
-        schema = self._makeDiaForcedSourceSchema()
-        catalog = afwTable.BaseCatalog(schema)
-        for obj in objects:
-
-            record = catalog.addNew()
-            record.set("diaObjectId", obj['id'])
-            record.set("ccdVisitId", visit_id)
-            record.set("pixelId", obj['pixelId'])
-            record.set("flags", 0)
-
-        return catalog
 
     def _htm_indices(self, region):
         """Generate a set of HTM indices covering specified field of view.

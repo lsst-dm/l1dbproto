@@ -78,6 +78,26 @@ class _Stat:
 _values = defaultdict(lambda: _Stat())
 
 
+def _sort_lines(iterable, num=100):
+    """sort input file according to timestamps.
+
+    Log files are written from multiple process and sometimes ordering can
+    be violated. This method sorts inputs according to timestamps.
+    """
+    def _sort_key(line):
+        # extract timestamp
+        return line.split()[:2]
+
+    lines = []
+    for line in iterable:
+        lines.append(line)
+        if len(lines) > num:
+            lines.sort(key=_sort_key)
+            yield lines.pop(0)
+    lines.sort(key=_sort_key)
+    yield from lines
+
+
 def _new_visit(line):
     """
     Initialize data structures for new visit.
@@ -281,7 +301,7 @@ def main():
                 input = f
             except IOError:
                 input = open(input, "rt")
-        for line in input:
+        for line in _sort_lines(input):
             for match, method in dispatch:
                 # if line matches then call corresponding method
                 if match.search(line):

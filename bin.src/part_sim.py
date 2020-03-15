@@ -53,7 +53,7 @@ FOV_rad = FOV * math.pi / 180.
 
 def main():
 
-    descr = 'One-line application description.'
+    descr = 'Quick and dirty simulation of sky partitioning and CCD overlaps.'
     parser = ArgumentParser(description=descr)
     parser.add_argument('-v', '--verbose', action='count', default=0,
                         help='More verbose output, can use several times.')
@@ -76,14 +76,18 @@ def main():
     if args.mode == 'htm':
         pixelator = HtmPixelization(args.level)
         lvlchk = pixelator.level
+        poly = pixelator.triangle
     elif args.mode == 'q3c':
         pixelator = Q3cPixelization(args.level)
         lvlchk = None
+        poly = pixelator.quad
     elif args.mode == 'mq3c':
         pixelator = Mq3cPixelization(args.level)
         lvlchk = pixelator.level
+        poly = pixelator.quad
 
     pixels_per_tile = []
+    area_per_tile = []
     tiles_per_pixel = []
 
     for i in range(args.counts):
@@ -101,6 +105,7 @@ def main():
             ranges = pixelator.envelope(tile, 1000000)
 
             tile_pixels = 0
+            tile_area = 0.
             for i0, i1 in ranges:
                 for pixId in range(i0, i1):
                     if lvlchk is not None and lvlchk(pixId) != args.level:
@@ -109,22 +114,30 @@ def main():
                         tile_pixels += 1
                         pixel_tiles.setdefault(pixId, 0)
                         pixel_tiles[pixId] += 1
+                        if poly:
+                            tile_area += geom.poly_area(poly(pixId)) * (180/math.pi)**2
 
             pixels_per_tile.append(tile_pixels)
+            area_per_tile.append(tile_area)
 
         for count in pixel_tiles.values():
             tiles_per_pixel.append(count)
 
+    avg_area = sum(area_per_tile) / len(area_per_tile)
+
     print("pixels_per_tile: {:.2f}".format(sum(pixels_per_tile)/len(pixels_per_tile)))
+    print("area_per_tile: {:.6f} deg^2".format(avg_area))
     print("tiles_per_pixel: {:.2f}".format(sum(tiles_per_pixel)/len(tiles_per_pixel)))
 
     if args.pixels_per_tile:
         with open(args.pixels_per_tile, 'w') as f:
-            for num in pixels_per_tile:
-                print(num, file=f)
+            print("pixels,area_deg_sq", file=f)
+            for pix, area in zip(pixels_per_tile, area_per_tile):
+                print(f"{pix},{area}", file=f)
 
     if args.tiles_per_pixel:
         with open(args.tiles_per_pixel, 'w') as f:
+            print("tiles", file=f)
             for num in tiles_per_pixel:
                 print(num, file=f)
 
