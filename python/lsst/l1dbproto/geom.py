@@ -198,3 +198,50 @@ def make_tiles(open_angle, ndiv, direction=np.array([0., 0., 1.]), rot_rad=None)
         return make_camera_tiles(open_angle, -ndiv, direction=direction, rot_rad=rot_rad)
     else:
         return make_square_tiles(open_angle, ndiv, ndiv, direction=direction, rot_rad=rot_rad)
+
+
+def poly_area(polygon):
+    """Calculate area ov a convex polygon.
+
+    Parameters
+    ----------
+    polygon : `lsst.sphgeom.ConvexPolygon`
+
+    Returns
+    -------
+    area : `float`
+    """
+
+    vertices = polygon.getVertices()
+    area = 0.
+    for i in range(2, len(vertices)):
+        area += triangle_area(vertices[0], vertices[i-1], vertices[i])
+    return area
+
+
+def triangle_area(v0, v1, v2):
+    """Calculate triangle area.
+
+    Parameters
+    ----------
+    v0, v1, v2 : `lsst.sphgeom.UnitVector3d`
+
+    Returns
+    -------
+    area : `float`
+    """
+
+    # sides of a triangle
+    arccos = math.acos
+    a = arccos(v1.dot(v2))
+    b = arccos(v0.dot(v2))
+    c = arccos(v0.dot(v1))
+
+    # angles
+    sin, cos = math.sin, math.cos
+    alpha = arccos((cos(a)-cos(b)*cos(c))/(sin(b)*sin(c)))
+    beta = arccos((cos(b)-cos(a)*cos(c))/(sin(a)*sin(c)))
+    gamma = arccos((cos(c)-cos(a)*cos(b))/(sin(a)*sin(b)))
+
+    area = alpha + beta + gamma - math.pi
+    return area
