@@ -88,10 +88,47 @@ def _visitTimes(start_time, interval_sec, count):
             count -= 1
         dt += delta
 
-# def _utc_seconds(dt):
-#     """Convert datetime to POSIX seconds
-#     """
-#     return int((dt - datetime.utcfromtimestamp(0)).total_seconds())
+
+class PosFunc:
+
+    def __init__(self, objects, latest_objects):
+        self.obj_pos = {}
+        for record in latest_objects:
+            self.obj_pos[record["id"]] = self.pos_func_diaobj(record)
+        for record in objects:
+            self.obj_pos[record["id"]] = self.pos_func_diaobj(record)
+
+    def pos_func_diasrc(self, record):
+        """Calculate Dia[Forced]Source position from the record
+
+        Parameters
+        ----------
+        record :
+            aft.table record for DiaSource catalog
+
+        Returns
+        -------
+        position : `lsst.sphgeom.UnitVector3d`
+        """
+        # potentialy DiaSource can be associated with SSObject, but ap_proto
+        # does not do that.
+        objId = record["diaObjectId"]
+        return self.obj_pos[objId]
+
+    def pos_func_diaobj(self, record):
+        """Calculate DiaObject position from the record
+
+        Parameters
+        ----------
+        record :
+            aft.table record for DiaObject catalog
+
+        Returns
+        -------
+        position : `lsst.sphgeom.UnitVector3d`
+        """
+        lonLat = LonLat.fromRadians(record['coord_ra'].asRadians(), record['coord_dec'].asRadians())
+        return UnitVector3d(lonLat)
 
 
 # special code to makr sources ouside reagion
@@ -432,12 +469,9 @@ class APProto(object):
 
         with timer.Timer(name+"Objects-read"):
 
-            # determine indices that we need
-            ranges = self._htm_indices(region)
-
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(ranges)
+            latest_objects = db.getDiaObjects(region)
             _LOG.info(name+'database found %s objects', len(latest_objects))
 
             # filter database obects to a mask
@@ -458,30 +492,32 @@ class APProto(object):
         with timer.Timer(name+"Source-read"):
 
             latest_objects_ids = [obj['id'] for obj in latest_objects]
-            read_srcs = db.getDiaSources(ranges, latest_objects_ids, dt)
+            read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
             _LOG.info(name+'database found %s sources', len(read_srcs or []))
 
-            read_srcs = db.getDiaForcedSources(ranges, latest_objects_ids, dt)
+            read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt)
             _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
 
         if not self.args.no_update:
 
             with timer.Timer(name+"L1-store"):
 
+                pos_func = PosFunc(objects, latest_objects)
+
                 # store new versions of objects
                 _LOG.info(name+'will store %d Objects', len(objects))
                 if objects:
-                    db.storeDiaObjects(objects, dt)
+                    db.storeDiaObjects(objects, dt, pos_func.pos_func_diaobj)
 
                 # store all sources
                 _LOG.info(name+'will store %d Sources', len(srcs))
                 if srcs:
-                    db.storeDiaSources(srcs, dt)
+                    db.storeDiaSources(srcs, dt, pos_func.pos_func_diasrc)
 
                 # store all forced sources
                 _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
                 if fsrcs:
-                    db.storeDiaForcedSources(fsrcs, dt)
+                    db.storeDiaForcedSources(fsrcs, dt, pos_func.pos_func_diasrc)
 
     def _filterDiaObjects(self, latest_objects, region):
         """Filter out objects from a catalog which are outside region.
@@ -711,28 +747,6 @@ class APProto(object):
         schema.addField("flags", "L")
 
         return schema
-
-    def _htm_indices(self, region):
-        """Generate a set of HTM indices covering specified field of view.
-
-        Parameters
-        ----------
-        region: `sphgeom.Region`
-            Region that needs to be indexed
-
-        Returns
-        -------
-        Sequence of ranges, range is a tuple (minHtmID, maxHtmID).
-        """
-
-        _LOG.debug('region: %s', region)
-        pixelator = HtmPixelization(self.config.htm_level)
-        indices = pixelator.envelope(region, self.config.htm_max_ranges)
-        for irange in indices.ranges():
-            _LOG.debug('range: %s %s', pixelator.toString(irange[0]),
-                       pixelator.toString(irange[1]))
-
-        return indices.ranges()
 
 
 #
