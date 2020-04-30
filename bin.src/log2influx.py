@@ -252,15 +252,21 @@ def _parse_queries_count(line):
     words = line.split()
     key = None
     if "getDiaObjects" in line:
-        key = "obj_queries"
+        key = "obj"
         value = int(words[-1])
     elif "_getSources DiaSource" in line:
-        key = "src_queries"
+        key = "src"
         value = int(words[-1])
     elif "_getSources DiaForcedSource" in line:
-        key = "fsrc_queries"
+        key = "fsrc"
         value = int(words[-1])
     if key:
+        if "#queries:" in line:
+            key += "_queries"
+        elif "#partitions:" in line:
+            key += "_partitions"
+        else:
+            return
         # ts = _timestamp(line)
         # tile = _tile(line)
         # print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
@@ -324,6 +330,7 @@ _dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
              (re.compile(r"Start processing visit \d+ tile"), _new_tile_visit),
              (re.compile(" row count: "), _parse_counts),
              (re.compile(": real="), _parse_timers),
+             (re.compile(": #partitions: "), _parse_queries_count),
              (re.compile(": #queries: "), _parse_queries_count),
              (re.compile(" database found "), _parse_select_count),
              (re.compile(" after filtering "), _parse_select_count),
