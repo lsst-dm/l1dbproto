@@ -178,10 +178,15 @@ def _run(conn, config, args):
     all_metrics = {}
 
     # get the list of objects and attributes to monitor
+    all_names = list(conn.queryNames(ObjectName("*:*"), None))
+
     for metrics in config["metrics"]:
         objectName = metrics["object"]
-        names = conn.queryNames(objectName, None)
-        for oname in names:
+        logging.debug("querying object %s", objectName)
+        #names = conn.queryNames(objectName, None)
+        for oname in all_names:
+            if not objectName.apply(oname):
+                continue
             info = conn.getMBeanInfo(oname)
             logging.debug("checking %s", oname)
 
