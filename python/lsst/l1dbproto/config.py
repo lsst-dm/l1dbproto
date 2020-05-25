@@ -83,6 +83,16 @@ class L1dbprotoConfig(Config):
                           allowed=dict(fork="Forking mode", mpi="MPI mode"),
                           doc='multiprocessing mode, only for `divide > 1` or `divide < 0',
                           default="fork")
+    src_read_duty_cycle = Field(
+        dtype=float,
+        doc=("Fraction of visits for which (forced) sources are read from database."),
+        default=1.
+    )
+    src_read_period = Field(
+        dtype=int,
+        doc=("Period for repating read/no-read cycles for (forced) sources."),
+        default=1000
+    )
 
     @property
     def FOV_rad(self):

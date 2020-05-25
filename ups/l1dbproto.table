@@ -1,8 +1,8 @@
 setupRequired(afw)
 setupRequired(dax_apdb)
-setupRequired(mpi4py)
-setupRequired(python)
-setupRequired(scons)
+#setupRequired(mpi4py)
+#setupRequired(python)
+#setupRequired(scons)
 setupRequired(sconsUtils)
 setupRequired(sphgeom)
 
