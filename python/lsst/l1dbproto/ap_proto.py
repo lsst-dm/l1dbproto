@@ -234,6 +234,10 @@ class APProto(object):
             _LOG.info("Will divide FOV into %d regions", num_tiles)
         _LOG.info("Max. number of ranges for pixelator: %d", self.config.htm_max_ranges)
 
+        src_read_period = self.config.src_read_period
+        src_read_visits = round(self.config.src_read_period * self.config.src_read_duty_cycle)
+        _LOG.info("Will read sources for %d visits out of %d", src_read_visits, src_read_period)
+
         # read sources file
         _LOG.info("Start loading variable sources from %r", self.config.sources_file)
         var_sources = numpy.load(self.config.sources_file)
@@ -461,6 +465,10 @@ class APProto(object):
         if tile is not None:
             name = "tile={}x{} ".format(*tile)
 
+        src_read_period = self.config.src_read_period
+        src_read_visits = round(self.config.src_read_period * self.config.src_read_duty_cycle)
+        do_read_src = visit_id % src_read_period < src_read_visits
+
         # make a mask
         for i in range(len(sources)):
             xyz = sources[i]
@@ -489,14 +497,17 @@ class APProto(object):
             # do forced photometry (can extends objects)
             fsrcs = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
 
-        with timer.Timer(name+"Source-read"):
+        if do_read_src:
+            with timer.Timer(name+"Source-read"):
 
-            latest_objects_ids = [obj['id'] for obj in latest_objects]
-            read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
-            _LOG.info(name+'database found %s sources', len(read_srcs or []))
+                latest_objects_ids = [obj['id'] for obj in latest_objects]
+                read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
+                _LOG.info(name+'database found %s sources', len(read_srcs or []))
 
-            read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt)
-            _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
+                read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt)
+                _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
+        else:
+            _LOG.info("skipping reading of sources for this visit")
 
         if not self.args.no_update:
 
