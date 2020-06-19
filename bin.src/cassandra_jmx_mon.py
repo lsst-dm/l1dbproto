@@ -183,7 +183,7 @@ def _run(conn, config, args):
     for metrics in config["metrics"]:
         objectName = metrics["object"]
         logging.debug("querying object %s", objectName)
-        #names = conn.queryNames(objectName, None)
+        # names = conn.queryNames(objectName, None)
         for oname in all_names:
             if not objectName.apply(oname):
                 continue
@@ -245,6 +245,7 @@ def _attr2influx(oname, values, host):
         line = t
         n = keys.pop(u"name", None)
         if n:
+            n = n.replace(" ", "_")
             line += u"." + n
         for k, v in keys.items():
             v = v.replace(" ", "_")
