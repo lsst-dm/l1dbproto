@@ -24,6 +24,10 @@ metrics:
     attributes: .*
   - object: org.apache.cassandra.metrics:type=ThreadPools,*
     attributes: .*
+  - object: org.apache.cassandra.db:type=StorageProxy
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=ReadRepair,*
+    attributes: .*
   - object: java.lang:type=GarbageCollector,*
     attributes: CollectionCount|CollectionTime
   - object: java.lang:type=OperatingSystem
