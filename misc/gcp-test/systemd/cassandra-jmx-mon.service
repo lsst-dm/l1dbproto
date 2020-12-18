@@ -1,0 +1,23 @@
+[Unit]
+Description=Cassandra APDB JMX monitor
+After=cassandra.service
+
+[Service]
+User=andy_salnikov_gmail_com
+Group=andy_salnikov_gmail_com
+Type=simple
+ExecStart=/home/andy_salnikov_gmail_com/project/apdb-gcloud/cassandra-jmx-mon.sh
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=100000
+LimitMEMLOCK=infinity
+LimitNPROC=32768
+LimitAS=infinity
+Restart=always
+TimeoutStopSec=180
+SuccessExitStatus=143
+KillSignal=SIGINT
+
+
+[Install]
+WantedBy=multi-user.target
