@@ -1,0 +1,12 @@
+[Unit]
+Description=Local SSD initialization
+Before=cassandra.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/scripts/cassandra_data_init.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=cassandra.service
