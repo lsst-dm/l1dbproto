@@ -236,9 +236,10 @@ def _run(conn, config, args):
                     try:
                         values = conn.getAttributes(oname, attributes)
                     except Exception as exc:
-                        logging.error("Failed to get attributes oname=%s attributes=%s: %s", oname, attributes, exc)
+                        logging.error("Failed to get attributes oname=%s attributes=%s: %s",
+                                      oname, attributes, exc)
                         continue
-                    except:
+                    except:  # noqa
                         logging.error("Failed to get attributes oname=%s attributes=%s", oname, attributes)
                         continue
                     line = _attr2influx(oname, values, args.host)
