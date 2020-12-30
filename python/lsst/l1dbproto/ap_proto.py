@@ -148,7 +148,7 @@ class PosFuncPandas:
         for record in latest_objects.itertuples(index=False):
             self.obj_pos[record.diaObjectId] = self.pos_func_diaobj(record)
         for record in objects.itertuples(index=False):
-            self.obj_pos[record.id] = self.pos_func_diaobj(record)
+            self.obj_pos[record.diaObjectId] = self.pos_func_diaobj(record)
 
     def pos_func_diasrc(self, record):
         """Calculate Dia[Forced]Source position from the record
@@ -677,15 +677,15 @@ class APProto(object):
                 return index
 
             catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
-            catalog["id"] = indices
-            catalog = catalog[catalog.id != _OUTSIDER]
+            catalog["diaObjectId"] = indices
+            catalog = catalog[catalog.diaObjectId != _OUTSIDER]
 
             cat_polar = catalog.apply(polar, axis=1, result_type='expand')
-            cat_polar["id"] = catalog["id"]
+            cat_polar["diaObjectId"] = catalog["diaObjectId"]
             cat_polar["pixelId"] = catalog.apply(pixel, axis=1, result_type='reduce')
             catalog = cat_polar
 
-            n_trans = sum(catalog.id >= _TRANSIENT_START_ID)
+            n_trans = sum(catalog.diaObjectId >= _TRANSIENT_START_ID)
 
         else:
 
@@ -746,11 +746,11 @@ class APProto(object):
         if self.config.use_pandas:
 
             # Ids of the detected objects
-            ids = set(objects['id'])
+            ids = set(objects['diaObjectId'])
 
             # do forced photometry for all detected DiaObjects
             df1 = pandas.DataFrame({
-                "diaObjectId": objects["id"],
+                "diaObjectId": objects["diaObjectId"],
                 "ccdVisitId": visit_id,
                 "pixelId": objects["pixelId"],
                 "flags": 0,
@@ -876,7 +876,7 @@ class APProto(object):
             catalog["flags"] = 0
 
             nrows = catalog.shape[0]
-            catalog["id"] = range(self.lastSourceId + 1, self.lastSourceId + 1 + nrows)
+            catalog["diaSourceId"] = range(self.lastSourceId + 1, self.lastSourceId + 1 + nrows)
             self.lastSourceId += nrows
 
         else:
