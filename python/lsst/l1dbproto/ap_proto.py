@@ -745,6 +745,9 @@ class APProto(object):
 
         if self.config.use_pandas:
 
+            if objects.empty:
+                return None
+
             # Ids of the detected objects
             ids = set(objects['diaObjectId'])
 
@@ -763,14 +766,17 @@ class APProto(object):
             cutoff = dt - timedelta(days=self.config.forced_cutoff_days)
             o1 = o1[o1.lastNonForcedSource > cutoff]
 
-            df2 = pandas.DataFrame({
-                "diaObjectId": o1["diaObjectId"],
-                "ccdVisitId": visit_id,
-                "pixelId": o1["pixelId"],
-                "flags": 0,
-            })
+            if o1.empty:
+                catalog = df1
+            else:
+                df2 = pandas.DataFrame({
+                    "diaObjectId": o1["diaObjectId"],
+                    "ccdVisitId": visit_id,
+                    "pixelId": o1["pixelId"],
+                    "flags": 0,
+                })
 
-            catalog = pandas.concat([df1, df2])
+                catalog = pandas.concat([df1, df2])
 
         else:
 
