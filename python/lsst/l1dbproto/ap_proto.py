@@ -32,6 +32,7 @@ from argparse import ArgumentParser
 from datetime import datetime, timedelta
 import logging
 import os
+import pandas
 import sys
 import time
 
@@ -89,7 +90,16 @@ def _visitTimes(start_time, interval_sec, count):
         dt += delta
 
 
-class PosFunc:
+def _nrows(table):
+    if isinstance(table, pandas.DataFrame):
+        return table.shape[0]
+    elif table is None:
+        return 0
+    else:
+        return len(table)
+
+
+class PosFuncAfw:
 
     def __init__(self, objects, latest_objects):
         self.obj_pos = {}
@@ -128,6 +138,48 @@ class PosFunc:
         position : `lsst.sphgeom.UnitVector3d`
         """
         lonLat = LonLat.fromRadians(record['coord_ra'].asRadians(), record['coord_dec'].asRadians())
+        return UnitVector3d(lonLat)
+
+
+class PosFuncPandas:
+
+    def __init__(self, objects, latest_objects):
+        self.obj_pos = {}
+        for record in latest_objects.itertuples(index=False):
+            self.obj_pos[record.diaObjectId] = self.pos_func_diaobj(record)
+        for record in objects.itertuples(index=False):
+            self.obj_pos[record.diaObjectId] = self.pos_func_diaobj(record)
+
+    def pos_func_diasrc(self, record):
+        """Calculate Dia[Forced]Source position from the record
+
+        Parameters
+        ----------
+        record : namedtuple
+            namedtuple record for DiaSource catalog
+
+        Returns
+        -------
+        position : `lsst.sphgeom.UnitVector3d`
+        """
+        # potentialy DiaSource can be associated with SSObject, but ap_proto
+        # does not do that.
+        objId = record.diaObjectId
+        return self.obj_pos[objId]
+
+    def pos_func_diaobj(self, record):
+        """Calculate DiaObject position from the record
+
+        Parameters
+        ----------
+        record : namedtuple
+            namedtuple record for DiaObject catalog
+
+        Returns
+        -------
+        position : `lsst.sphgeom.UnitVector3d`
+        """
+        lonLat = LonLat.fromDegrees(record.ra, record.decl)
         return UnitVector3d(lonLat)
 
 
@@ -479,12 +531,12 @@ class APProto(object):
 
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(region)
-            _LOG.info(name+'database found %s objects', len(latest_objects))
+            latest_objects = db.getDiaObjects(region, return_pandas=self.config.use_pandas)
+            _LOG.info(name+'database found %s objects', _nrows(latest_objects))
 
             # filter database obects to a mask
             latest_objects = self._filterDiaObjects(latest_objects, region)
-            _LOG.info(name+'after filtering %s objects', len(latest_objects))
+            _LOG.info(name+'after filtering %s objects', _nrows(latest_objects))
 
         with timer.Timer(name+"S2O-matching"):
 
@@ -500,12 +552,18 @@ class APProto(object):
         if do_read_src:
             with timer.Timer(name+"Source-read"):
 
-                latest_objects_ids = [obj['id'] for obj in latest_objects]
-                read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
-                _LOG.info(name+'database found %s sources', len(read_srcs or []))
+                if isinstance(latest_objects, pandas.DataFrame):
+                    latest_objects_ids = list(latest_objects['diaObjectId'])
+                else:
+                    latest_objects_ids = [obj['id'] for obj in latest_objects]
 
-                read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt)
-                _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
+                read_srcs = db.getDiaSources(region, latest_objects_ids, dt,
+                                             return_pandas=self.config.use_pandas)
+                _LOG.info(name+'database found %s sources', _nrows(read_srcs))
+
+                read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt,
+                                                   return_pandas=self.config.use_pandas)
+                _LOG.info(name+'database found %s forced sources', _nrows(read_srcs))
         else:
             _LOG.info("skipping reading of sources for this visit")
 
@@ -513,21 +571,24 @@ class APProto(object):
 
             with timer.Timer(name+"L1-store"):
 
-                pos_func = PosFunc(objects, latest_objects)
+                if self.config.use_pandas:
+                    pos_func = PosFuncPandas(objects, latest_objects)
+                else:
+                    pos_func = PosFuncAfw(objects, latest_objects)
 
                 # store new versions of objects
-                _LOG.info(name+'will store %d Objects', len(objects))
-                if objects:
+                _LOG.info(name+'will store %d Objects', _nrows(objects))
+                if _nrows(objects) > 0:
                     db.storeDiaObjects(objects, dt, pos_func.pos_func_diaobj)
 
                 # store all sources
-                _LOG.info(name+'will store %d Sources', len(srcs))
-                if srcs:
+                _LOG.info(name+'will store %d Sources', _nrows(srcs))
+                if _nrows(srcs) > 0:
                     db.storeDiaSources(srcs, dt, pos_func.pos_func_diasrc)
 
                 # store all forced sources
-                _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
-                if fsrcs:
+                _LOG.info(name+'will store %d ForcedSources', _nrows(fsrcs))
+                if _nrows(fsrcs) > 0:
                     db.storeDiaForcedSources(fsrcs, dt, pos_func.pos_func_diasrc)
 
     def _filterDiaObjects(self, latest_objects, region):
@@ -535,7 +596,7 @@ class APProto(object):
 
         Parameters
         ----------
-        latest_objects : `afw.table.BaseCatalog`
+        latest_objects : `afw.table.BaseCatalog` or `pandas.DataFrame`
             Catalog containing DiaObject records
         region : `sphgem.Region`
 
@@ -544,15 +605,30 @@ class APProto(object):
         Filtered `afw.table.BaseCatalog` containing only records contained
         in the region.
         """
-        mask = numpy.ndarray(len(latest_objects), dtype=bool)
-        for i, obj in enumerate(latest_objects):
-            # TODO: For now we use APDB units (degrees), will have to be changed
-            # in case we adopt afw units.
-            lonLat = LonLat.fromRadians(obj['coord_ra'].asRadians(), obj['coord_dec'].asRadians())
-            dir_obj = UnitVector3d(lonLat)
-            mask[i] = region.contains(dir_obj)
+        if isinstance(latest_objects, pandas.DataFrame):
 
-        return latest_objects.subset(mask)
+            if latest_objects.empty:
+                return latest_objects
+
+            def in_region(obj):
+                lonLat = LonLat.fromDegrees(obj['ra'], obj['decl'])
+                dir_obj = UnitVector3d(lonLat)
+                return region.contains(dir_obj)
+
+            mask = latest_objects.apply(in_region, axis=1, result_type='reduce')
+            return latest_objects[mask]
+
+        else:
+
+            mask = numpy.ndarray(len(latest_objects), dtype=bool)
+            for i, obj in enumerate(latest_objects):
+                # TODO: For now we use APDB units (degrees), will have to be changed
+                # in case we adopt afw units.
+                lonLat = LonLat.fromRadians(obj['coord_ra'].asRadians(), obj['coord_dec'].asRadians())
+                dir_obj = UnitVector3d(lonLat)
+                mask[i] = region.contains(dir_obj)
+
+            return latest_objects.subset(mask)
 
     def _makeDiaObjectSchema(self):
         """Make afw.table schema for DiaObjects.
@@ -582,39 +658,67 @@ class APProto(object):
 
         Returns
         -------
-        `afw.table.BaseCatalog`
+        `afw.table.BaseCatalog` or `pandas.DataFrame`
         """
 
-        schema = self._makeDiaObjectSchema()
-        catalog = afwTable.SourceCatalog(schema)
-        n_trans = 0
-        for i in range(len(sources)):
+        if self.config.use_pandas:
 
-            var_idx = int(indices[i])
-            if var_idx == _OUTSIDER:
-                continue
+            def polar(row):
+                v3d = Vector3d(row.x, row.y, row.z)
+                sp = SpherePoint(v3d)
+                return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
+                                     index=["ra", "decl"])
 
-            xyz = sources[i]
-            if var_idx >= _TRANSIENT_START_ID:
-                n_trans += 1
+            def pixel(row):
+                v3d = Vector3d(row.x, row.y, row.z)
+                dir_v = UnitVector3d(v3d)
+                pixelator = HtmPixelization(self.config.htm_level)
+                index = pixelator.index(dir_v)
+                return index
 
-            v3d = Vector3d(xyz[0], xyz[1], xyz[2])
-            sp = SpherePoint(v3d)
+            catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
+            catalog["diaObjectId"] = indices
+            catalog = catalog[catalog.diaObjectId != _OUTSIDER]
 
-            dir_v = UnitVector3d(v3d)
-            pixelator = HtmPixelization(self.config.htm_level)
-            index = pixelator.index(dir_v)
+            cat_polar = catalog.apply(polar, axis=1, result_type='expand')
+            cat_polar["diaObjectId"] = catalog["diaObjectId"]
+            cat_polar["pixelId"] = catalog.apply(pixel, axis=1, result_type='reduce')
+            catalog = cat_polar
 
-            record = catalog.addNew()
-            record.set("id", var_idx)
-            # record.set("validityStart", _utc_seconds(dt))
-            # record.set("validityEnd", 0)
-            # record.set("lastNonForcedSource", _utc_seconds(dt))
-            record.set("coord_ra", sp.getRa())
-            record.set("coord_dec", sp.getDec())
-            record.set("pixelId", index)
+            n_trans = sum(catalog.diaObjectId >= _TRANSIENT_START_ID)
 
-        _LOG.info('found %s matching objects and %s transients/noise', len(catalog) - n_trans, n_trans)
+        else:
+
+            schema = self._makeDiaObjectSchema()
+            catalog = afwTable.SourceCatalog(schema)
+            n_trans = 0
+            for i in range(len(sources)):
+
+                var_idx = int(indices[i])
+                if var_idx == _OUTSIDER:
+                    continue
+
+                xyz = sources[i]
+                if var_idx >= _TRANSIENT_START_ID:
+                    n_trans += 1
+
+                v3d = Vector3d(xyz[0], xyz[1], xyz[2])
+                sp = SpherePoint(v3d)
+
+                dir_v = UnitVector3d(v3d)
+                pixelator = HtmPixelization(self.config.htm_level)
+                index = pixelator.index(dir_v)
+
+                record = catalog.addNew()
+                record.set("id", var_idx)
+                # record.set("validityStart", _utc_seconds(dt))
+                # record.set("validityEnd", 0)
+                # record.set("lastNonForcedSource", _utc_seconds(dt))
+                record.set("coord_ra", sp.getRa())
+                record.set("coord_dec", sp.getDec())
+                record.set("pixelId", index)
+
+        _LOG.info('found %s matching objects and %s transients/noise', _nrows(catalog) - n_trans, n_trans)
 
         return catalog
 
@@ -625,9 +729,9 @@ class APProto(object):
 
         Parameters
         ----------
-        objects : `afw.table.BaseCatalog`
+        objects : `afw.table.BaseCatalog` or `pandas.DataFrame`
             Catalog containing DiaObject records
-        latest_objects : `afw.table.BaseCatalog`
+        latest_objects : `afw.table.BaseCatalog` or `pandas.DataFrame`
             Catalog containing DiaObject records
         dt : `datetime.datetime`
             Visit time
@@ -636,51 +740,88 @@ class APProto(object):
 
         Returns
         -------
-        `afw.table.BaseCatalog`
+        `afw.table.BaseCatalog` or `pandas.DataFrame`
         """
 
-        # Ids of the detected objects
-        ids = set(obj['id'] for obj in objects)
+        if self.config.use_pandas:
 
-        schema = self._makeDiaForcedSourceSchema()
-        catalog = afwTable.BaseCatalog(schema)
+            if objects.empty:
+                return None
 
-        # do forced photometry for all detected DiaObjects
-        for obj in objects:
+            # Ids of the detected objects
+            ids = set(objects['diaObjectId'])
 
-            record = catalog.addNew()
-            record.set("diaObjectId", obj['id'])
-            record.set("ccdVisitId", visit_id)
-            record.set("pixelId", obj['pixelId'])
-            record.set("flags", 0)
+            # do forced photometry for all detected DiaObjects
+            df1 = pandas.DataFrame({
+                "diaObjectId": objects["diaObjectId"],
+                "ccdVisitId": visit_id,
+                "pixelId": objects["pixelId"],
+                "flags": 0,
+            })
 
-        # do forced photometry for non-detected DiaObjects (newer than cutoff)
-        for obj in latest_objects:
-            if obj['id'] in ids:
-                continue
+            # do forced photometry for non-detected DiaObjects (newer than cutoff)
+            o1 = latest_objects[~latest_objects["diaObjectId"].isin(ids)]
+
             # only do it for 30 days after last detection
-            lastNonForcedSource = datetime.utcfromtimestamp(obj['lastNonForcedSource'])
-            delta = dt - lastNonForcedSource
-            if delta > timedelta(days=self.config.forced_cutoff_days):
-                continue
+            cutoff = dt - timedelta(days=self.config.forced_cutoff_days)
+            o1 = o1[o1.lastNonForcedSource > cutoff]
 
-            record = catalog.addNew()
-            record.set("diaObjectId", obj['id'])
-            record.set("ccdVisitId", visit_id)
-            record.set("pixelId", obj['pixelId'])
-            record.set("flags", 0)
+            if o1.empty:
+                catalog = df1
+            else:
+                df2 = pandas.DataFrame({
+                    "diaObjectId": o1["diaObjectId"],
+                    "ccdVisitId": visit_id,
+                    "pixelId": o1["pixelId"],
+                    "flags": 0,
+                })
 
-            # optionally make new DiaObjects for all non-detected objects
-            if self.config.make_forced_objects:
+                catalog = pandas.concat([df1, df2])
 
-                record = objects.addNew()
-                record.set("id", obj['id'])
-                # record.set("validityStart", _utc_seconds(dt))
-                # record.set("validityEnd", 0)
-                # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
-                record.set("coord_ra", obj["coord_ra"])
-                record.set("coord_dec", obj["coord_dec"])
-                record.set("pixelId", obj["pixelId"])
+        else:
+
+            # Ids of the detected objects
+            ids = set(obj['id'] for obj in objects)
+
+            schema = self._makeDiaForcedSourceSchema()
+            catalog = afwTable.BaseCatalog(schema)
+
+            # do forced photometry for all detected DiaObjects
+            for obj in objects:
+
+                record = catalog.addNew()
+                record.set("diaObjectId", obj['id'])
+                record.set("ccdVisitId", visit_id)
+                record.set("pixelId", obj['pixelId'])
+                record.set("flags", 0)
+
+            # do forced photometry for non-detected DiaObjects (newer than cutoff)
+            for obj in latest_objects:
+                if obj['id'] in ids:
+                    continue
+                # only do it for 30 days after last detection
+                lastNonForcedSource = datetime.utcfromtimestamp(obj['lastNonForcedSource'])
+                delta = dt - lastNonForcedSource
+                if delta > timedelta(days=self.config.forced_cutoff_days):
+                    continue
+
+                record = catalog.addNew()
+                record.set("diaObjectId", obj['id'])
+                record.set("ccdVisitId", visit_id)
+                record.set("pixelId", obj['pixelId'])
+                record.set("flags", 0)
+
+                # # optionally make new DiaObjects for all non-detected objects
+                # if self.config.make_forced_objects:
+
+                #     record = objects.addNew()
+                #     record.set("id", obj['id'])
+                #     # record.set("validityStart", _utc_seconds(dt))
+                #     # record.set("validityEnd", 0)
+                #     # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
+                #     record.set("coord_ra", obj["coord_ra"])
+                #     record.set("coord_dec", obj["coord_dec"])
+                #     record.set("pixelId", obj["pixelId"])
 
         return catalog
 
@@ -711,35 +852,70 @@ class APProto(object):
         `afw.table.BaseCatalog`
         """
 
-        schema = self._makeDiaSourceSchema()
-        catalog = afwTable.BaseCatalog(schema)
-        for i in range(len(sources)):
+        if self.config.use_pandas:
 
-            var_idx = int(indices[i])
-            if var_idx == _OUTSIDER:
-                continue
+            def polar(row):
+                v3d = Vector3d(row.x, row.y, row.z)
+                sp = SpherePoint(v3d)
+                return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
+                                     index=["ra", "decl"])
 
-            xyz = sources[i]
-            v3d = Vector3d(xyz[0], xyz[1], xyz[2])
-            sp = SpherePoint(v3d)
+            def pixel(row):
+                v3d = Vector3d(row.x, row.y, row.z)
+                dir_v = UnitVector3d(v3d)
+                pixelator = HtmPixelization(self.config.htm_level)
+                index = pixelator.index(dir_v)
+                return index
 
-            dir_v = UnitVector3d(v3d)
-            pixelator = HtmPixelization(self.config.htm_level)
-            index = pixelator.index(dir_v)
+            catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
+            catalog["diaObjectId"] = indices
+            catalog = catalog[catalog.diaObjectId != _OUTSIDER]
 
-            self.lastSourceId += 1
+            cat_polar = catalog.apply(polar, axis=1, result_type='expand')
+            cat_polar["pixelId"] = catalog.apply(pixel, axis=1, result_type='reduce')
+            cat_polar["diaObjectId"] = catalog["diaObjectId"]
+            catalog = cat_polar
+            catalog["ccdVisitId"] = visit_id
+            catalog["parent"] = 0
+            catalog["psFlux"] = 1.
+            catalog["psFluxErr"] = 0.01
+            catalog["flags"] = 0
 
-            record = catalog.addNew()
-            record.set("id", self.lastSourceId)
-            record.set("ccdVisitId", visit_id)
-            record.set("diaObjectId", var_idx)
-            record.set("parent", 0)
-            record.set("coord_ra", sp.getRa())
-            record.set("coord_dec", sp.getDec())
-            record.set("psFlux", 1.)
-            record.set("psFluxErr", .01)
-            record.set("flags", 0)
-            record.set("pixelId", index)
+            nrows = catalog.shape[0]
+            catalog["diaSourceId"] = range(self.lastSourceId + 1, self.lastSourceId + 1 + nrows)
+            self.lastSourceId += nrows
+
+        else:
+
+            schema = self._makeDiaSourceSchema()
+            catalog = afwTable.BaseCatalog(schema)
+            for i in range(len(sources)):
+
+                var_idx = int(indices[i])
+                if var_idx == _OUTSIDER:
+                    continue
+
+                xyz = sources[i]
+                v3d = Vector3d(xyz[0], xyz[1], xyz[2])
+                sp = SpherePoint(v3d)
+
+                dir_v = UnitVector3d(v3d)
+                pixelator = HtmPixelization(self.config.htm_level)
+                index = pixelator.index(dir_v)
+
+                self.lastSourceId += 1
+
+                record = catalog.addNew()
+                record.set("id", self.lastSourceId)
+                record.set("ccdVisitId", visit_id)
+                record.set("diaObjectId", var_idx)
+                record.set("parent", 0)
+                record.set("coord_ra", sp.getRa())
+                record.set("coord_dec", sp.getDec())
+                record.set("psFlux", 1.)
+                record.set("psFluxErr", .01)
+                record.set("flags", 0)
+                record.set("pixelId", index)
 
         return catalog
 

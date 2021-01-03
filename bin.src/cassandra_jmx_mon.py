@@ -8,6 +8,7 @@ Note that this is Jython script and Jython only understands Python 2.7.
 from __future__ import print_function
 
 import argparse
+from collections import defaultdict
 from contextlib import closing
 import gzip
 import logging
@@ -162,20 +163,17 @@ def _makeOutput(args):
     return out
 
 
-def _run(conn, config, args):
-    """Run monitoring loop until killed.
+def _makeNames(conn, config):
+    """Generate the names of objects to query and their attibutes.
 
-    Parameters
-    ----------
-    conn :
-        server connection instance
-    config : `dict`
-        Configuration dictionary
-    args : `argparse.Namespace`
-        Parsed command line arguments
+    Yield
+    -----
+    objectName : `str`
+        Name of the object.
+    attributes : `lsit`
+        Names of attributes for this object.
     """
-
-    all_metrics = {}
+    all_metrics = defaultdict(set)
 
     # get the list of objects and attributes to monitor
     all_names = list(conn.queryNames(ObjectName("*:*"), None))
@@ -190,16 +188,30 @@ def _run(conn, config, args):
             info = conn.getMBeanInfo(oname)
             logging.debug("checking %s", oname)
 
-            attributes = []
+            attributes = set()
             for attr in info.attributes:
                 if metrics["attributes"].match(attr.name):
-                    attributes += [attr.name]
+                    attributes.add(attr.name)
                     logging.debug("    %s matches", attr.name)
             if attributes:
-                all_attr = all_metrics.get(str(oname), [])
-                all_attr += attributes
-                all_metrics[str(oname)] = all_attr
+                all_metrics[str(oname)] |= attributes
 
+    for oname, attributes in all_metrics.items():
+        yield oname, list(attributes)
+
+
+def _run(conn, config, args):
+    """Run monitoring loop until killed.
+
+    Parameters
+    ----------
+    conn :
+        server connection instance
+    config : `dict`
+        Configuration dictionary
+    args : `argparse.Namespace`
+        Parsed command line arguments
+    """
     while not _stop:
 
         with closing(_makeOutput(args)) as out:
@@ -218,10 +230,18 @@ def _run(conn, config, args):
                 if _stop:
                     break
 
-                for oname, attributes in all_metrics.items():
+                for oname, attributes in _makeNames(conn, config):
                     now = time.time()
                     oname = ObjectName(oname)
-                    values = conn.getAttributes(oname, attributes)
+                    try:
+                        values = conn.getAttributes(oname, attributes)
+                    except Exception as exc:
+                        logging.error("Failed to get attributes oname=%s attributes=%s: %s",
+                                      oname, attributes, exc)
+                        continue
+                    except:  # noqa
+                        logging.error("Failed to get attributes oname=%s attributes=%s", oname, attributes)
+                        continue
                     line = _attr2influx(oname, values, args.host)
                     if line:
                         ts = int(now*1e9)

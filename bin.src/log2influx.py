@@ -26,11 +26,14 @@
 
 from argparse import ArgumentParser
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 import gzip
 import logging
 import re
 import sys
+
+
+_tz = None
 
 
 def _configLogger(verbosity):
@@ -118,6 +121,7 @@ def _timestamp(line):
     """
     ts = ' '.join(line.split()[:2]).replace(',', '.')
     dt = datetime.fromisoformat(ts)
+    dt = dt.replace(tzinfo=_tz)
     return int(round(dt.timestamp() * 1e3))*1000000
 
 
@@ -347,12 +351,18 @@ def main():
     parser.add_argument('-v', '--verbose', action='count', default=0,
                         help='More verbose output, can use several times.')
     parser.add_argument("-D", "--database", default="ap_proto", help="Name of the InfluxDB database.")
+    parser.add_argument("-u", "--utc", default=False, action="store_true",
+                        help="Use UTC for timestamps in the log file.")
     parser.add_argument('file', nargs='+',
                         help='Name of input log file, optionally compressed, use "-" for stdin')
     args = parser.parse_args()
 
     # configure logging
     _configLogger(args.verbose)
+
+    if args.utc:
+        global _tz
+        _tz = timezone.utc
 
     dispatch = _dispatch
 

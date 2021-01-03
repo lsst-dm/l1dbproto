@@ -93,6 +93,11 @@ class L1dbprotoConfig(Config):
         doc=("Period for repating read/no-read cycles for (forced) sources."),
         default=1000
     )
+    use_pandas = Field(
+        dtype=bool,
+        doc="Use pandas DataFrame instead of afw Table.",
+        default=False
+    )
 
     @property
     def FOV_rad(self):
