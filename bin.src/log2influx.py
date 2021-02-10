@@ -31,6 +31,7 @@ import gzip
 import logging
 import re
 import sys
+import time
 
 
 _tz = None
@@ -327,6 +328,7 @@ def _end_visit(line):
     for key, stat in _timers_cpu.items():
         # print(f"timer,tile='fov',timer={key} sum={stat.sum},avg={stat.average} {ts}")
         print(f"timing,timer={key},kind=cpu sum={stat.sum},avg={stat.average} {ts}")
+    sys.stdout.flush()
 
 
 # Map line sibstring to method
@@ -344,6 +346,47 @@ _dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
              ]
 
 
+def _follow(input, stop_timeout_sec=60):
+    """Implement reading from a file that is being written into (tail -F).
+    """
+
+    stop_re = re.compile("Stopping MPI tile processes")
+
+    last_read = time.time()
+    buffer = ""
+    block_size = 64 * 1024
+    stop = False
+    while True:
+
+        if "\n" not in buffer:
+            if stop:
+                return
+            # buffer is empty or only has partial line, read more
+            more_data = input.read(block_size)
+            if not more_data:
+                if time.time() > last_read + stop_timeout_sec:
+                    # no new data in a while, stop
+                    stop = True
+                else:
+                    # wait a little and restart loop
+                    time.sleep(0.1)
+                continue
+            else:
+                buffer += more_data
+                last_read = time.time()
+
+        idx = buffer.find("\n")
+        if idx >= 0:
+            line = buffer[:idx+1]
+            buffer = buffer[idx+1:]
+
+            if stop_re.match(line):
+                # stop after reading remaing lines
+                stop = True
+
+            yield line
+
+
 def main():
 
     descr = 'Read ap_proto log and extract few numbers into csv.'
@@ -353,6 +396,10 @@ def main():
     parser.add_argument("-D", "--database", default="ap_proto", help="Name of the InfluxDB database.")
     parser.add_argument("-u", "--utc", default=False, action="store_true",
                         help="Use UTC for timestamps in the log file.")
+    parser.add_argument("-F", "--follow", default=False, action="store_true",
+                        help="Continue reading as file grows.")
+    parser.add_argument("--follow-timeout", default=60, type=int, metavar="SECONDS",
+                        help="Max number of seconds to wait for file to grow, def: %(default)s.")
     parser.add_argument('file', nargs='+',
                         help='Name of input log file, optionally compressed, use "-" for stdin')
     args = parser.parse_args()
@@ -381,6 +428,8 @@ def main():
                 input = f
             except IOError:
                 input = open(input, "rt")
+        if args.follow:
+            input = _follow(input, args.follow_timeout)
         for line in _sort_lines(input):
             for match, method in dispatch:
                 # if line matches then call corresponding method

@@ -30,6 +30,7 @@ import gzip
 import logging
 import re
 import sys
+import time
 
 
 def _configLogger(verbosity):
@@ -240,6 +241,7 @@ def _end_visit(line):
         print(','.join(_cols))
         _header = False
     print(','.join(str(_value(c)) for c in _cols))
+    sys.stdout.flush()
 
 
 # Map line sibstring to method
@@ -258,6 +260,47 @@ _daily_dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_vis
                    ]
 
 
+def _follow(input, stop_timeout_sec=60):
+    """Implement reading from a file that is being written into (tail -F).
+    """
+
+    stop_re = re.compile("Stopping MPI tile processes")
+
+    last_read = time.time()
+    buffer = ""
+    block_size = 64 * 1024
+    stop = False
+    while True:
+
+        if "\n" not in buffer:
+            if stop:
+                return
+            # buffer is empty or only has partial line, read more
+            more_data = input.read(block_size)
+            if not more_data:
+                if time.time() > last_read + stop_timeout_sec:
+                    # no new data in a while, stop
+                    stop = True
+                else:
+                    # wait a little and restart loop
+                    time.sleep(0.1)
+                continue
+            else:
+                buffer += more_data
+                last_read = time.time()
+
+        idx = buffer.find("\n")
+        if idx >= 0:
+            line = buffer[:idx+1]
+            buffer = buffer[idx+1:]
+
+            if stop_re.match(line):
+                # stop after reading remaing lines
+                stop = True
+
+            yield line
+
+
 def main():
 
     descr = 'Read ap_proto log and extract few numbers into csv.'
@@ -268,6 +311,10 @@ def main():
                         help='Save fewer columns into CSV file.')
     parser.add_argument('-d', '--daily', action='store_true', default=False,
                         help='Extract numbers from daily activities.')
+    parser.add_argument("-F", "--follow", default=False, action="store_true",
+                        help="Continue reading as file grows.")
+    parser.add_argument("--follow-timeout", default=60, type=int, metavar="SECONDS",
+                        help="Max number of seconds to wait for file to grow, def: %(default)s.")
     parser.add_argument('file', nargs='+',
                         help='Name of input log file, optionally compressed, use "-" for stdin')
     args = parser.parse_args()
@@ -301,6 +348,8 @@ def main():
                 input = f
             except IOError:
                 input = open(input, "rt")
+        if args.follow:
+            input = _follow(input, args.follow_timeout)
         for line in _sort_lines(input):
             for match, method in dispatch:
                 # if line matches then call corresponding method
