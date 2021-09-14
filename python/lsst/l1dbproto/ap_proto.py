@@ -40,6 +40,7 @@ import numpy
 import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
+from .visit_info import VisitInfoStore
 from lsst.dax.apdb import (Apdb, make_minimal_dia_object_schema,
                            make_minimal_dia_source_schema, timer)
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
@@ -114,7 +115,9 @@ class APProto(object):
         parser.add_argument('-v', '--verbose', dest='verbose', action='count', default=0,
                             help='More verbose output, can use several times.')
         parser.add_argument('-n', '--num-visits', type=int, default=1, metavar='NUMBER',
-                            help='Numer of visits to process, def: 1')
+                            help='Number of visits to process, def: 1')
+        parser.add_argument('-f', '--visits-file', default="ap_proto_visits.dat", metavar='PATH',
+                            help='File to keep visit information, def: %(default)s')
         parser.add_argument('-c', '--config', default=None, metavar='PATH',
                             help='Name of the database config file (pex.config)')
         parser.add_argument('-d', '--dump-config', default=False, action="store_true",
@@ -143,6 +146,7 @@ class APProto(object):
 
         # instantiate db interface
         db = Apdb(self.config)
+        visitInfoStore = VisitInfoStore(self.args.visits_file)
 
         if self.config.divide > 1:
             # check that we have reasonable MPI setup
@@ -162,7 +166,7 @@ class APProto(object):
                     return self.run_mpi_tile_loop(db, comm)
 
         # Initialize starting values from database visits table
-        last_visit = db.lastVisit()
+        last_visit = visitInfoStore.lastVisit()
         if last_visit is not None:
             start_visit_id = last_visit.visitId + 1
             start_time = last_visit.visitTime + timedelta(seconds=self.config.interval)
@@ -311,7 +315,7 @@ class APProto(object):
 
             if not self.args.no_update:
                 # store last visit info
-                db.saveVisit(visit_id, dt)
+                visitInfoStore.saveVisit(visit_id, dt, self.lastObjectId, self.lastSourceId)
 
             _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" +
                       COLOR_RESET, visit_id, loop_timer)
@@ -709,12 +713,3 @@ class APProto(object):
                        pixelator.toString(irange[1]))
 
         return indices.ranges()
-
-
-#
-#  run application when imported as a main module
-#
-if __name__ == "__main__":
-    app = APProto()
-    rc = app.run()
-    sys.exit(rc)

@@ -31,7 +31,7 @@ from argparse import ArgumentParser
 import logging
 import sys
 
-from lsst.dax.ppdb import Ppdb, make_minimal_dia_object_schema, make_minimal_dia_source_schema
+from lsst.dax.apdb import Apdb, make_minimal_dia_object_schema, make_minimal_dia_source_schema
 from lsst.l1dbproto import L1dbprotoConfig
 
 
@@ -78,7 +78,7 @@ def main():
                            DiaSource=make_minimal_dia_source_schema())
 
     # instantiate db interface
-    db = Ppdb(config=config, afw_schemas=afw_schemas)
+    db = Apdb(config=config, afw_schemas=afw_schemas)
 
     # do it
     db.makeSchema(drop=args.drop, oracle_tablespace=args.tablespace, oracle_iot=args.iot)
