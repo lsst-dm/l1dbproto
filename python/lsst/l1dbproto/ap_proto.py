@@ -34,6 +34,7 @@ import logging
 import os
 import sys
 import time
+from typing import Any, Iterator, List, Optional, Tuple
 
 from mpi4py import MPI
 import numpy
@@ -43,7 +44,7 @@ from . import L1dbprotoConfig, DIA, generators, geom
 from .visit_info import VisitInfoStore
 from lsst.dax.apdb import (Apdb, make_minimal_dia_object_schema,
                            make_minimal_dia_source_schema, timer)
-from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
+from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, Region, UnitVector3d, Vector3d
 
 
 COLOR_RED = '\033[1;31m'
@@ -58,7 +59,7 @@ COLOR_RESET = '\033[0m'
 _LOG = logging.getLogger('ap_proto')
 
 
-def _configLogger(verbosity):
+def _configLogger(verbosity: int) -> None:
     """
     Configure logging based on verbosity level.
     """
@@ -69,14 +70,14 @@ def _configLogger(verbosity):
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
 
-def _isDayTime(dt):
+def _isDayTime(dt: datetime) -> bool:
     """
     Returns true if time is not good for observing.
     """
     return 6 <= dt.hour < 20
 
 
-def _visitTimes(start_time, interval_sec, count):
+def _visitTimes(start_time: datetime, interval_sec: int, count: int) -> Iterator[datetime]:
     """
     Generator for visit times.
     """
@@ -105,7 +106,7 @@ class APProto(object):
     """Implementation of Alert Production prototype.
     """
 
-    def __init__(self, argv):
+    def __init__(self, argv: List[str]):
 
         self.lastObjectId = _TRANSIENT_START_ID
         self.lastSourceId = 0
@@ -133,7 +134,7 @@ class APProto(object):
 
         self.config = L1dbprotoConfig()
 
-    def run(self):
+    def run(self) -> Optional[int]:
         """Run whole shebang.
         """
 
@@ -163,7 +164,8 @@ class APProto(object):
                                      f"does not match number of tiles ({num_tiles})")
                 if rank != 0:
                     # run simple loop for all non-master processes
-                    return self.run_mpi_tile_loop(db, comm)
+                    self.run_mpi_tile_loop(db, comm)
+                    return None
 
         # Initialize starting values from database visits table
         last_visit = visitInfoStore.lastVisit()
@@ -323,18 +325,18 @@ class APProto(object):
         # stop MPI slaves
         if self.config.divide > 1 and self.config.mp_mode == "mpi":
             _LOG.info("Stopping MPI tile processes")
-            tile_data = [None] * self.config.divide**2
-            self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data)
+            tile_data_stop = [None] * self.config.divide**2
+            self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data_stop)
 
         return 0
 
-    def run_mpi_tile_loop(self, db, comm):
+    def run_mpi_tile_loop(self, db: Apdb, comm: Any) -> None:
         """This is the method executing visit loop inside non-master MPI process
         """
         while self.run_mpi_tile(db, comm):
             pass
 
-    def run_mpi_tile(self, db, comm, tile_data=None):
+    def run_mpi_tile(self, db: Apdb, comm: Any, tile_data: Any = None) -> Any:
         """This is the method executed by each MPI tile process for a single
         visit.
 
@@ -383,7 +385,8 @@ class APProto(object):
                 # return gathered data to root
                 return data
 
-    def visit(self, db, visit_id, dt, region, sources, indices, tile=None):
+    def visit(self, db: Apdb, visit_id: int, dt: datetime, region: Region,
+              sources: numpy.ndarray, indices: numpy.ndarray, tile: Optional[Tuple[int, int]] = None) -> None:
         """AP processing of a single visit (with known sources)
 
         Parameters
@@ -391,7 +394,7 @@ class APProto(object):
         visit_id : `int`
         dt : `datetime`
             Time of visit
-        region : `sphgem.Region`
+        region : `sphgeom.Region`
             Region, could be the whole FOV (Circle) or small piece of it
         sources : `numpy.array`
             Array of xyz coordinates of sources, this has all visit sources,
@@ -472,14 +475,14 @@ class APProto(object):
                 if fsrcs:
                     db.storeDiaForcedSources(fsrcs)
 
-    def _filterDiaObjects(self, latest_objects, region):
+    def _filterDiaObjects(self, latest_objects: afwTable.BaseCatalog, region: Region) -> afwTable.BaseCatalog:
         """Filter out objects from a catalog which are outside region.
 
         Parameters
         ----------
         latest_objects : `afw.table.BaseCatalog`
             Catalog containing DiaObject records
-        region : `sphgem.Region`
+        region : `sphgeom.Region`
 
         Returns
         -------
@@ -496,7 +499,7 @@ class APProto(object):
 
         return latest_objects.subset(mask)
 
-    def _makeDiaObjectSchema(self):
+    def _makeDiaObjectSchema(self) -> afwTable.Schema:
         """Make afw.table schema for DiaObjects.
 
         Schema should be compatible with APDB schema and it should contain
@@ -505,7 +508,8 @@ class APProto(object):
         schema = make_minimal_dia_object_schema()
         return schema
 
-    def _makeDiaObjects(self, sources, indices, dt):
+    def _makeDiaObjects(self, sources: numpy.ndarray, indices: numpy.ndarray, dt: datetime
+                        ) -> afwTable.BaseCatalog:
         """Over-simplified implementation of source-to-object matching and
         new DiaObject generation.
 
@@ -560,7 +564,8 @@ class APProto(object):
 
         return catalog
 
-    def _forcedPhotometry(self, objects, latest_objects, dt):
+    def _forcedPhotometry(self, objects: afwTable.BaseCatalog, latest_objects: afwTable.BaseCatalog,
+                          dt: datetime) -> None:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
@@ -594,7 +599,7 @@ class APProto(object):
             record.set("coord_dec", obj["coord_dec"])
             record.set("pixelId", obj["pixelId"])
 
-    def _makeDiaSourceSchema(self):
+    def _makeDiaSourceSchema(self) -> afwTable.Schema:
         """Make afw.table schema for DiaSource.
 
         Schema should be compatible with APDB schema and it should contain
@@ -603,7 +608,8 @@ class APProto(object):
         schema = make_minimal_dia_source_schema()
         return schema
 
-    def _makeDiaSources(self, sources, indices, visit_id):
+    def _makeDiaSources(self, sources: numpy.ndarray, indices: numpy.ndarray, visit_id: int
+                        ) -> afwTable.BaseCatalog:
         """Generate catalog of DiaSources to store in a database
 
         Parameters
@@ -651,7 +657,7 @@ class APProto(object):
 
         return catalog
 
-    def _makeDiaForcedSourceSchema(self):
+    def _makeDiaForcedSourceSchema(self) -> afwTable.Schema:
         """Make afw.table schema for DiaForcedSource.
 
         Schema should be compatible with APDB schema and it should contain
@@ -666,7 +672,7 @@ class APProto(object):
 
         return schema
 
-    def _makeDiaForcedSources(self, objects, visit_id):
+    def _makeDiaForcedSources(self, objects: afwTable.BaseCatalog, visit_id: int) -> afwTable.BaseCatalog:
         """Generate catalog of DiaForcedSources to store in a database.
 
         Parameters
@@ -692,7 +698,7 @@ class APProto(object):
 
         return catalog
 
-    def _htm_indices(self, region):
+    def _htm_indices(self, region: Region) -> List[Tuple[int, int]]:
         """Generate a set of HTM indices covering specified field of view.
 
         Parameters

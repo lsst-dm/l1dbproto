@@ -27,16 +27,16 @@ from typing import NamedTuple, Optional
 class VisitInfo(NamedTuple):
     """Information about a visit
     """
-    visitId: Optional[int] = None
+    visitId: int
     """Visit ID, serial integer"""
 
-    visitTime: Optional[datetime.datetime] = None
+    visitTime: datetime.datetime
     """Visit time"""
 
-    lastObjectId: Optional[int] = None
+    lastObjectId: int
     """Highest existing DIAObject ID"""
 
-    lastSourceId: Optional[int] = None
+    lastSourceId: int
     """Highest existing DIASource ID"""
 
 

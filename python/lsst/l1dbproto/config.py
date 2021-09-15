@@ -75,13 +75,13 @@ class L1dbprotoConfig(ApdbConfig):
                           default="fork")
 
     @property
-    def FOV_rad(self):
+    def FOV_rad(self) -> float:
         """FOV in radians.
         """
         return self.FOV_deg * math.pi / 180
 
     @property
-    def start_time_dt(self):
+    def start_time_dt(self) -> datetime.datetime:
         """start_time as datetime.
         """
         dt = datetime.datetime.strptime(self.start_time, '%Y-%m-%d %H:%M:%S')

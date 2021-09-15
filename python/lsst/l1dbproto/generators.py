@@ -21,14 +21,17 @@
 
 """Module defining methods for generating random things.
 """
+from __future__ import annotations
 
 import math
 import numpy
+from typing import Optional
 
 from .geom import rotation_matrix
 
 
-def rand_sphere_xyz(count=1, hemi=0, seed=None):
+def rand_sphere_xyz(count: int = 1, hemi: int = 0, seed: Optional[int] = None
+                    ) -> numpy.ndarray:
     """
     Generates random points on unit sphere.
 
@@ -54,7 +57,8 @@ def rand_sphere_xyz(count=1, hemi=0, seed=None):
     return r
 
 
-def rand_cone_xyz(direction, open_angle, n=1, seed=None):
+def rand_cone_xyz(direction: numpy.ndarray, open_angle: float, n: int = 1, seed: Optional[int] = None
+                  ) -> numpy.ndarray:
     """
     Generate random vectors in a cone around given vector.
 
