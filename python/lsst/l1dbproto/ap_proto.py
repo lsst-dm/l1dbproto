@@ -32,18 +32,17 @@ from argparse import ArgumentParser
 from datetime import datetime, timedelta
 import logging
 import os
+import pandas
 import sys
 import time
-from typing import Any, Iterator, List, Optional, Tuple
+from typing import Any, cast, Iterator, List, Optional, Tuple
 
 from mpi4py import MPI
 import numpy
-import lsst.afw.table as afwTable
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
 from .visit_info import VisitInfoStore
-from lsst.dax.apdb import (Apdb, make_minimal_dia_object_schema,
-                           make_minimal_dia_source_schema, timer)
+from lsst.dax.apdb import (Apdb, timer)
 from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, Region, UnitVector3d, Vector3d
 
 
@@ -435,26 +434,23 @@ class APProto(object):
             # create all new DiaObjects
             objects = self._makeDiaObjects(sources, indices, dt)
 
-            # do forced photometry on non-detected objects (extends objects)
-            self._forcedPhotometry(objects, latest_objects, dt)
-
-            # Store all sources
+            # make all sources
             srcs = self._makeDiaSources(sources, indices, visit_id)
 
-            # make forced sources for every object
-            fsrcs = self._makeDiaForcedSources(objects, visit_id)
+            # do forced photometry (can extends objects)
+            fsrcs = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
 
         with timer.Timer(name+"Source-read"):
 
-            latest_objects_ids = [obj['id'] for obj in latest_objects]
+            latest_objects_ids = list(latest_objects['diaObjectId'])
             if self.config.sources_region:
                 read_srcs = db.getDiaSourcesInRegion(ranges, dt)
             else:
                 read_srcs = db.getDiaSources(latest_objects_ids, dt)
-            _LOG.info(name+'database found %s sources', len(read_srcs or []))
+            _LOG.info(name+'database found %s sources', 0 if read_srcs is None else len(read_srcs))
 
             read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
-            _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
+            _LOG.info(name+'database found %s forced sources', 0 if read_srcs is None else len(read_srcs))
 
         if not self.args.no_update:
 
@@ -462,54 +458,47 @@ class APProto(object):
 
                 # store new versions of objects
                 _LOG.info(name+'will store %d Objects', len(objects))
-                if objects:
+                if not objects.empty:
                     db.storeDiaObjects(objects, dt)
 
                 # store all sources
                 _LOG.info(name+'will store %d Sources', len(srcs))
-                if srcs:
+                if not srcs.empty:
                     db.storeDiaSources(srcs)
 
                 # store all forced sources
-                _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
-                if fsrcs:
+                if fsrcs is not None and not fsrcs.empty:
+                    _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
                     db.storeDiaForcedSources(fsrcs)
 
-    def _filterDiaObjects(self, latest_objects: afwTable.BaseCatalog, region: Region) -> afwTable.BaseCatalog:
+    def _filterDiaObjects(self, latest_objects: pandas.DataFrame, region: Region) -> pandas.DataFrame:
         """Filter out objects from a catalog which are outside region.
 
         Parameters
         ----------
-        latest_objects : `afw.table.BaseCatalog`
+        latest_objects : `pandas.DataFrame`
             Catalog containing DiaObject records
         region : `sphgeom.Region`
 
         Returns
         -------
-        Filtered `afw.table.BaseCatalog` containing only records contained
+        Filtered `pandas.DataFrame` containing only records contained
         in the region.
         """
-        mask = numpy.ndarray(len(latest_objects), dtype=bool)
-        for i, obj in enumerate(latest_objects):
-            # TODO: For now we use APDB units (degrees), will have to be changed
-            # in case we adopt afw units.
-            lonLat = LonLat.fromRadians(obj['coord_ra'].asRadians(), obj['coord_dec'].asRadians())
+
+        if latest_objects.empty:
+            return latest_objects
+
+        def in_region(obj: Any) -> bool:
+            lonLat = LonLat.fromDegrees(obj['ra'], obj['decl'])
             dir_obj = UnitVector3d(lonLat)
-            mask[i] = region.contains(dir_obj)
+            return region.contains(dir_obj)
 
-        return latest_objects.subset(mask)
-
-    def _makeDiaObjectSchema(self) -> afwTable.Schema:
-        """Make afw.table schema for DiaObjects.
-
-        Schema should be compatible with APDB schema and it should contain
-        all fields that have no default values in the schema.
-        """
-        schema = make_minimal_dia_object_schema()
-        return schema
+        mask = latest_objects.apply(in_region, axis=1, result_type='reduce')
+        return cast(pandas.DataFrame, latest_objects[mask])
 
     def _makeDiaObjects(self, sources: numpy.ndarray, indices: numpy.ndarray, dt: datetime
-                        ) -> afwTable.BaseCatalog:
+                        ) -> pandas.DataFrame:
         """Over-simplified implementation of source-to-object matching and
         new DiaObject generation.
 
@@ -528,88 +517,87 @@ class APProto(object):
 
         Returns
         -------
-        `afw.table.BaseCatalog`
+        catalog : `pandas.DataFrame`
+            Catalog of DiaObjects.
         """
 
-        schema = self._makeDiaObjectSchema()
-        catalog = afwTable.SourceCatalog(schema)
-        n_trans = 0
-        for i in range(len(sources)):
-
-            var_idx = int(indices[i])
-            if var_idx == _OUTSIDER:
-                continue
-
-            xyz = sources[i]
-            if var_idx >= _TRANSIENT_START_ID:
-                n_trans += 1
-
-            v3d = Vector3d(xyz[0], xyz[1], xyz[2])
+        def polar(row: Any) -> pandas.Series:
+            v3d = Vector3d(row.x, row.y, row.z)
             sp = SpherePoint(v3d)
+            return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
+                                 index=["ra", "decl"])
 
+        def pixel(row: Any) -> int:
+            v3d = Vector3d(row.x, row.y, row.z)
             dir_v = UnitVector3d(v3d)
             pixelator = HtmPixelization(self.config.htm_level)
             index = pixelator.index(dir_v)
+            return index
 
-            record = catalog.addNew()
-            record.set("id", var_idx)
-            # record.set("validityStart", _utc_seconds(dt))
-            # record.set("validityEnd", 0)
-            # record.set("lastNonForcedSource", _utc_seconds(dt))
-            record.set("coord_ra", sp.getRa())
-            record.set("coord_dec", sp.getDec())
-            record.set("pixelId", index)
+        catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
+        catalog["diaObjectId"] = indices
+        catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
+
+        cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
+        cat_polar["diaObjectId"] = catalog["diaObjectId"]
+        cat_polar["pixelId"] = catalog.apply(pixel, axis=1, result_type='reduce')
+        catalog = cat_polar
+
+        n_trans = sum(catalog["diaObjectId"] >= _TRANSIENT_START_ID)
 
         _LOG.info('found %s matching objects and %s transients/noise', len(catalog) - n_trans, n_trans)
 
         return catalog
 
-    def _forcedPhotometry(self, objects: afwTable.BaseCatalog, latest_objects: afwTable.BaseCatalog,
-                          dt: datetime) -> None:
+    def _forcedPhotometry(self, objects: pandas.DataFrame, latest_objects: pandas.DataFrame,
+                          dt: datetime, visit_id: int) -> Optional[pandas.DataFrame]:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
 
         Parameters
         ----------
-        objects : `afw.table.BaseCatalog`
+        objects : `pandas.DataFrame`
             Catalog containing DiaObject records
-        latest_objects : `afw.table.BaseCatalog`
+        latest_objects : `pandas.DataFrame`
             Catalog containing DiaObject records
         """
+
+        if objects.empty:
+            return None
 
         # Ids of the detected objects
-        ids = set(obj['id'] for obj in objects)
+        ids = set(objects['diaObjectId'])
 
-        for obj in latest_objects:
-            # only do it for 30 days after last detection
-            if obj['id'] in ids:
-                continue
-            lastNonForcedSource = datetime.utcfromtimestamp(obj['lastNonForcedSource'])
-            delta = dt - lastNonForcedSource
-            if delta > timedelta(days=30):
-                continue
+        # do forced photometry for all detected DiaObjects
+        df1 = pandas.DataFrame({
+            "diaObjectId": objects["diaObjectId"],
+            "ccdVisitId": visit_id,
+            "flags": 0,
+        })
 
-            record = objects.addNew()
-            record.set("id", obj['id'])
-            # record.set("validityStart", _utc_seconds(dt))
-            # record.set("validityEnd", 0)
-            # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
-            record.set("coord_ra", obj["coord_ra"])
-            record.set("coord_dec", obj["coord_dec"])
-            record.set("pixelId", obj["pixelId"])
+        # do forced photometry for non-detected DiaObjects (newer than cutoff)
+        o1 = cast(pandas.DataFrame, latest_objects[~latest_objects["diaObjectId"].isin(ids)])
 
-    def _makeDiaSourceSchema(self) -> afwTable.Schema:
-        """Make afw.table schema for DiaSource.
+        # only do it for 30 days after last detection
+        cutoff = dt - timedelta(days=self.config.forced_cutoff_days)
+        o1 = cast(pandas.DataFrame, o1[o1["lastNonForcedSource"] > cutoff])
 
-        Schema should be compatible with APDB schema and it should contain
-        all fields that have no default values in the schema.
-        """
-        schema = make_minimal_dia_source_schema()
-        return schema
+        if o1.empty:
+            catalog = df1
+        else:
+            df2 = pandas.DataFrame({
+                "diaObjectId": o1["diaObjectId"],
+                "ccdVisitId": visit_id,
+                "flags": 0,
+            })
+
+            catalog = pandas.concat([df1, df2])
+
+        return catalog
 
     def _makeDiaSources(self, sources: numpy.ndarray, indices: numpy.ndarray, visit_id: int
-                        ) -> afwTable.BaseCatalog:
+                        ) -> pandas.DataFrame:
         """Generate catalog of DiaSources to store in a database
 
         Parameters
@@ -624,77 +612,40 @@ class APProto(object):
 
         Returns
         -------
-        `afw.table.BaseCatalog`
+        catalog : `pandas.DataFrame`
+            Catalog of DIASources.
         """
 
-        schema = self._makeDiaSourceSchema()
-        catalog = afwTable.BaseCatalog(schema)
-        for i in range(len(sources)):
-
-            var_idx = int(indices[i])
-            if var_idx == _OUTSIDER:
-                continue
-
-            xyz = sources[i]
-            v3d = Vector3d(xyz[0], xyz[1], xyz[2])
+        def polar(row: Any) -> pandas.Series:
+            v3d = Vector3d(row.x, row.y, row.z)
             sp = SpherePoint(v3d)
+            return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
+                                 index=["ra", "decl"])
 
+        def pixel(row: Any) -> int:
+            v3d = Vector3d(row.x, row.y, row.z)
             dir_v = UnitVector3d(v3d)
             pixelator = HtmPixelization(self.config.htm_level)
             index = pixelator.index(dir_v)
+            return index
 
-            self.lastSourceId += 1
+        catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
+        catalog["diaObjectId"] = indices
+        catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
 
-            record = catalog.addNew()
-            record.set("id", self.lastSourceId)
-            record.set("ccdVisitId", visit_id)
-            record.set("diaObjectId", var_idx)
-            record.set("parent", 0)
-            record.set("coord_ra", sp.getRa())
-            record.set("coord_dec", sp.getDec())
-            record.set("flags", 0)
-            record.set("pixelId", index)
+        cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
+        cat_polar["pixelId"] = catalog.apply(pixel, axis=1, result_type='reduce')
+        cat_polar["diaObjectId"] = catalog["diaObjectId"]
+        catalog = cat_polar
+        catalog["ccdVisitId"] = visit_id
+        catalog["parentDiaSourceId"] = 0
+        catalog["psFlux"] = 1.
+        catalog["psFluxErr"] = 0.01
+        catalog["flags"] = 0
 
-        return catalog
-
-    def _makeDiaForcedSourceSchema(self) -> afwTable.Schema:
-        """Make afw.table schema for DiaForcedSource.
-
-        Schema should be compatible with APDB schema and it should contain
-        all fields that have no default values in the schema.
-        """
-        schema = afwTable.Schema()
-
-        # APDB-specific stuff
-        schema.addField("diaObjectId", "L")
-        schema.addField("ccdVisitId", "L")
-        schema.addField("flags", "L")
-
-        return schema
-
-    def _makeDiaForcedSources(self, objects: afwTable.BaseCatalog, visit_id: int) -> afwTable.BaseCatalog:
-        """Generate catalog of DiaForcedSources to store in a database.
-
-        Parameters
-        ----------
-        objects : `afw.table.BaseCatalog`
-            Catalog containing DiaObject records
-        visit_id : `int`
-            ID of the visit
-
-        Returns
-        -------
-        `afw.table.BaseCatalog`
-        """
-
-        schema = self._makeDiaForcedSourceSchema()
-        catalog = afwTable.BaseCatalog(schema)
-        for obj in objects:
-
-            record = catalog.addNew()
-            record.set("diaObjectId", obj['id'])
-            record.set("ccdVisitId", visit_id)
-            record.set("flags", 0)
+        nrows = catalog.shape[0]
+        catalog["diaSourceId"] = range(self.lastSourceId + 1, self.lastSourceId + 1 + nrows)
+        self.lastSourceId += nrows
 
         return catalog
 

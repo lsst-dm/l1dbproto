@@ -57,6 +57,10 @@ class L1dbprotoConfig(ApdbConfig):
     sources_region = Field(dtype=bool,
                            default=False,
                            doc='Use region-based select for DiaSource')
+    forced_cutoff_days = Field(dtype=int,
+                               doc=("Period after which we stop forced photometry "
+                                    "if there was no observed source, def: 30"),
+                               default=30)
     start_time = Field(dtype=str,
                        default="2020-01-01 03:00:00",
                        doc=('Starting time, format: YYYY-MM-DD hh:mm:ss'
