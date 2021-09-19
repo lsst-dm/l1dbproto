@@ -43,7 +43,7 @@ from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
 from .visit_info import VisitInfoStore
 from lsst.dax.apdb import (Apdb, timer)
-from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, Region, UnitVector3d, Vector3d
+from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 
 
 COLOR_RED = '\033[1;31m'
@@ -177,7 +177,6 @@ class APProto(object):
 
         if self.config.divide > 1:
             _LOG.info("Will divide FOV into %dx%d regions", self.config.divide, self.config.divide)
-        _LOG.info("Max. number of ranges for pixelator: %d", self.config.htm_max_ranges)
 
         # read sources file
         _LOG.info("Start loading variable sources from %r", self.config.sources_file)
@@ -417,12 +416,9 @@ class APProto(object):
 
         with timer.Timer(name+"Objects-read"):
 
-            # determine indices that we need
-            ranges = self._htm_indices(region)
-
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(ranges)
+            latest_objects = db.getDiaObjects(region)
             _LOG.info(name+'database found %s objects', len(latest_objects))
 
             # filter database obects to a mask
@@ -444,7 +440,7 @@ class APProto(object):
 
             latest_objects_ids = list(latest_objects['diaObjectId'])
             if self.config.sources_region:
-                read_srcs = db.getDiaSourcesInRegion(ranges, dt)
+                read_srcs = db.getDiaSourcesInRegion(region, dt)
             else:
                 read_srcs = db.getDiaSources(latest_objects_ids, dt)
             _LOG.info(name+'database found %s sources', 0 if read_srcs is None else len(read_srcs))
@@ -527,20 +523,12 @@ class APProto(object):
             return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
                                  index=["ra", "decl"])
 
-        def pixel(row: Any) -> int:
-            v3d = Vector3d(row.x, row.y, row.z)
-            dir_v = UnitVector3d(v3d)
-            pixelator = HtmPixelization(self.config.htm_level)
-            index = pixelator.index(dir_v)
-            return index
-
         catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
         catalog["diaObjectId"] = indices
         catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
 
         cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
-        cat_polar["pixelId"] = catalog.apply(pixel, axis=1, result_type='reduce')
         catalog = cat_polar
 
         n_trans = sum(catalog["diaObjectId"] >= _TRANSIENT_START_ID)
@@ -622,19 +610,11 @@ class APProto(object):
             return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
                                  index=["ra", "decl"])
 
-        def pixel(row: Any) -> int:
-            v3d = Vector3d(row.x, row.y, row.z)
-            dir_v = UnitVector3d(v3d)
-            pixelator = HtmPixelization(self.config.htm_level)
-            index = pixelator.index(dir_v)
-            return index
-
         catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
         catalog["diaObjectId"] = indices
         catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
 
         cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
-        cat_polar["pixelId"] = catalog.apply(pixel, axis=1, result_type='reduce')
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
         catalog = cat_polar
         catalog["ccdVisitId"] = visit_id
@@ -648,25 +628,3 @@ class APProto(object):
         self.lastSourceId += nrows
 
         return catalog
-
-    def _htm_indices(self, region: Region) -> List[Tuple[int, int]]:
-        """Generate a set of HTM indices covering specified field of view.
-
-        Parameters
-        ----------
-        region: `sphgeom.Region`
-            Region that needs to be indexed
-
-        Returns
-        -------
-        Sequence of ranges, range is a tuple (minHtmID, maxHtmID).
-        """
-
-        _LOG.debug('region: %s', region)
-        pixelator = HtmPixelization(self.config.htm_level)
-        indices = pixelator.envelope(region, self.config.htm_max_ranges)
-        for irange in indices.ranges():
-            _LOG.debug('range: %s %s', pixelator.toString(irange[0]),
-                       pixelator.toString(irange[1]))
-
-        return indices.ranges()

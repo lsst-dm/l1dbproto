@@ -42,12 +42,6 @@ class L1dbprotoConfig(ApdbConfig):
     false_per_visit = Field(dtype=int,
                             doc="average number of false positives per visit",
                             default=5050)
-    htm_level = Field(dtype=int,
-                      doc="HTM indexing level",
-                      default=20)
-    htm_max_ranges = Field(dtype=int,
-                           doc="Max number of ranges in HTM envelope",
-                           default=64)
     divide = Field(dtype=int,
                    doc="Divide FOV into NUM*NUM tiles for parallel processing",
                    default=1)
