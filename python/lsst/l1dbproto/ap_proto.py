@@ -454,18 +454,9 @@ class APProto(object):
 
                 # store new versions of objects
                 _LOG.info(name+'will store %d Objects', len(objects))
-                if not objects.empty:
-                    db.storeDiaObjects(objects, dt)
-
-                # store all sources
                 _LOG.info(name+'will store %d Sources', len(srcs))
-                if not srcs.empty:
-                    db.storeDiaSources(srcs)
-
-                # store all forced sources
-                if fsrcs is not None and not fsrcs.empty:
-                    _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
-                    db.storeDiaForcedSources(fsrcs)
+                _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
+                db.store(dt, objects, srcs, fsrcs)
 
     def _filterDiaObjects(self, latest_objects: pandas.DataFrame, region: Region) -> pandas.DataFrame:
         """Filter out objects from a catalog which are outside region.
@@ -538,7 +529,7 @@ class APProto(object):
         return catalog
 
     def _forcedPhotometry(self, objects: pandas.DataFrame, latest_objects: pandas.DataFrame,
-                          dt: datetime, visit_id: int) -> Optional[pandas.DataFrame]:
+                          dt: datetime, visit_id: int) -> pandas.DataFrame:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
@@ -552,7 +543,7 @@ class APProto(object):
         """
 
         if objects.empty:
-            return None
+            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "flags"])
 
         # Ids of the detected objects
         ids = set(objects['diaObjectId'])
