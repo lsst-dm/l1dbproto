@@ -29,7 +29,7 @@ a database.
 __all__ = ["APProto"]
 
 from argparse import ArgumentParser
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 import os
 import pandas
@@ -39,6 +39,7 @@ from typing import Any, cast, Iterator, List, Optional, Tuple
 
 from mpi4py import MPI
 import numpy
+from lsst.daf.base import DateTime
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
 from .visit_info import VisitInfoStore
@@ -69,24 +70,25 @@ def _configLogger(verbosity: int) -> None:
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
 
-def _isDayTime(dt: datetime) -> bool:
+def _isDayTime(dt: DateTime) -> bool:
     """
     Returns true if time is not good for observing.
     """
-    return 6 <= dt.hour < 20
+    return 6 <= dt.toPython(DateTime.TAI).hour < 20
 
 
-def _visitTimes(start_time: datetime, interval_sec: int, count: int) -> Iterator[datetime]:
+def _visitTimes(start_time: DateTime, interval_sec: int, count: int) -> Iterator[DateTime]:
     """
     Generator for visit times.
     """
-    dt = start_time
-    delta = timedelta(seconds=interval_sec)
+    nsec = start_time.nsecs(DateTime.TAI)
+    delta = interval_sec * 1_000_000_000
     while count > 0:
+        dt = DateTime(nsec, DateTime.TAI)
         if not _isDayTime(dt):
             yield dt
             count -= 1
-        dt += delta
+        nsec += delta
 
 # def _utc_seconds(dt):
 #     """Convert datetime to POSIX seconds
@@ -170,7 +172,8 @@ class APProto(object):
         last_visit = visitInfoStore.lastVisit()
         if last_visit is not None:
             start_visit_id = last_visit.visitId + 1
-            start_time = last_visit.visitTime + timedelta(seconds=self.config.interval)
+            nsec = last_visit.visitTime.nsecs(DateTime.TAI) + self.config.interval * 1_000_000_000
+            start_time = DateTime(nsec, DateTime.TAI)
         else:
             start_visit_id = self.config.start_visit_id
             start_time = self.config.start_time_dt
@@ -383,14 +386,14 @@ class APProto(object):
                 # return gathered data to root
                 return data
 
-    def visit(self, db: Apdb, visit_id: int, dt: datetime, region: Region,
+    def visit(self, db: Apdb, visit_id: int, dt: DateTime, region: Region,
               sources: numpy.ndarray, indices: numpy.ndarray, tile: Optional[Tuple[int, int]] = None) -> None:
         """AP processing of a single visit (with known sources)
 
         Parameters
         ----------
         visit_id : `int`
-        dt : `datetime`
+        dt : `DateTime`
             Time of visit
         region : `sphgeom.Region`
             Region, could be the whole FOV (Circle) or small piece of it
@@ -431,7 +434,7 @@ class APProto(object):
             objects = self._makeDiaObjects(sources, indices, dt)
 
             # make all sources
-            srcs = self._makeDiaSources(sources, indices, visit_id)
+            srcs = self._makeDiaSources(sources, indices, dt, visit_id)
 
             # do forced photometry (can extends objects)
             fsrcs = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
@@ -439,13 +442,10 @@ class APProto(object):
         with timer.Timer(name+"Source-read"):
 
             latest_objects_ids = list(latest_objects['diaObjectId'])
-            if self.config.sources_region:
-                read_srcs = db.getDiaSourcesInRegion(region, dt)
-            else:
-                read_srcs = db.getDiaSources(latest_objects_ids, dt)
+            read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
             _LOG.info(name+'database found %s sources', 0 if read_srcs is None else len(read_srcs))
 
-            read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
+            read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt)
             _LOG.info(name+'database found %s forced sources', 0 if read_srcs is None else len(read_srcs))
 
         if not self.args.no_update:
@@ -484,7 +484,7 @@ class APProto(object):
         mask = latest_objects.apply(in_region, axis=1, result_type='reduce')
         return cast(pandas.DataFrame, latest_objects[mask])
 
-    def _makeDiaObjects(self, sources: numpy.ndarray, indices: numpy.ndarray, dt: datetime
+    def _makeDiaObjects(self, sources: numpy.ndarray, indices: numpy.ndarray, dt: DateTime
                         ) -> pandas.DataFrame:
         """Over-simplified implementation of source-to-object matching and
         new DiaObject generation.
@@ -499,7 +499,7 @@ class APProto(object):
         indices : `numpy.array`
             array of indices of sources, 1-dim ndarray, transient sources
             have negative indices
-        dt : `datetime.datetime`
+        dt : `DateTime`
             Visit time.
 
         Returns
@@ -529,7 +529,7 @@ class APProto(object):
         return catalog
 
     def _forcedPhotometry(self, objects: pandas.DataFrame, latest_objects: pandas.DataFrame,
-                          dt: datetime, visit_id: int) -> pandas.DataFrame:
+                          dt: DateTime, visit_id: int) -> pandas.DataFrame:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
@@ -540,10 +540,16 @@ class APProto(object):
             Catalog containing DiaObject records
         latest_objects : `pandas.DataFrame`
             Catalog containing DiaObject records
+        dt : `DateTime`
+            Visit time.
+        visit_id : `int`
+            Visit ID.
         """
 
+        midPointTai = dt.get(system=DateTime.MJD)
+
         if objects.empty:
-            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "flags"])
+            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midPointTai", "flags"])
 
         # Ids of the detected objects
         ids = set(objects['diaObjectId'])
@@ -552,6 +558,7 @@ class APProto(object):
         df1 = pandas.DataFrame({
             "diaObjectId": objects["diaObjectId"],
             "ccdVisitId": visit_id,
+            "midPointTai": midPointTai,
             "flags": 0,
         })
 
@@ -559,7 +566,7 @@ class APProto(object):
         o1 = cast(pandas.DataFrame, latest_objects[~latest_objects["diaObjectId"].isin(ids)])
 
         # only do it for 30 days after last detection
-        cutoff = dt - timedelta(days=self.config.forced_cutoff_days)
+        cutoff = dt.toPython() - timedelta(days=self.config.forced_cutoff_days)
         o1 = cast(pandas.DataFrame, o1[o1["lastNonForcedSource"] > cutoff])
 
         if o1.empty:
@@ -568,6 +575,7 @@ class APProto(object):
             df2 = pandas.DataFrame({
                 "diaObjectId": o1["diaObjectId"],
                 "ccdVisitId": visit_id,
+                "midPointTai": midPointTai,
                 "flags": 0,
             })
 
@@ -575,8 +583,8 @@ class APProto(object):
 
         return catalog
 
-    def _makeDiaSources(self, sources: numpy.ndarray, indices: numpy.ndarray, visit_id: int
-                        ) -> pandas.DataFrame:
+    def _makeDiaSources(self, sources: numpy.ndarray, indices: numpy.ndarray,
+                        dt: DateTime, visit_id: int) -> pandas.DataFrame:
         """Generate catalog of DiaSources to store in a database
 
         Parameters
@@ -586,6 +594,8 @@ class APProto(object):
         indices : `numpy.array`
             array of indices of sources, 1-dim ndarray, transient sources
             have negative indices
+        dt : `DateTime`
+            Visit time.
         visit_id : `int`
             ID of the visit
 
@@ -601,6 +611,8 @@ class APProto(object):
             return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
                                  index=["ra", "decl"])
 
+        midPointTai = dt.get(system=DateTime.MJD)
+
         catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
         catalog["diaObjectId"] = indices
         catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
@@ -612,6 +624,7 @@ class APProto(object):
         catalog["parentDiaSourceId"] = 0
         catalog["psFlux"] = 1.
         catalog["psFluxErr"] = 0.01
+        catalog["midPointTai"] = midPointTai
         catalog["flags"] = 0
 
         nrows = catalog.shape[0]

@@ -24,9 +24,9 @@
 
 __all__ = ["L1dbprotoConfig"]
 
-import datetime
 import math
 
+from lsst.daf.base import DateTime
 from lsst.dax.apdb import ApdbConfig
 from lsst.pex.config import Field, ChoiceField
 
@@ -48,18 +48,15 @@ class L1dbprotoConfig(ApdbConfig):
     interval = Field(dtype=int,
                      doc='Interval between visits in seconds, def: 45',
                      default=45)
-    sources_region = Field(dtype=bool,
-                           default=False,
-                           doc='Use region-based select for DiaSource')
     forced_cutoff_days = Field(dtype=int,
                                doc=("Period after which we stop forced photometry "
                                     "if there was no observed source, def: 30"),
                                default=30)
     start_time = Field(dtype=str,
-                       default="2020-01-01 03:00:00",
-                       doc=('Starting time, format: YYYY-MM-DD hh:mm:ss'
+                       default="2020-01-01T03:00:00",
+                       doc=('Starting time, format: YYYY-MM-DDThh:mm:ss'
                             '. Time is assumed to be in UTC time zone. Used only at'
-                            ' first invocation to intialize database.'))
+                            ' first invocation to initialize database.'))
     start_visit_id = Field(dtype=int,
                            default=1,
                            doc='Starting visit ID. Used only at first invocation'
@@ -79,8 +76,8 @@ class L1dbprotoConfig(ApdbConfig):
         return self.FOV_deg * math.pi / 180
 
     @property
-    def start_time_dt(self) -> datetime.datetime:
-        """start_time as datetime.
+    def start_time_dt(self) -> DateTime:
+        """start_time as DateTime.
         """
-        dt = datetime.datetime.strptime(self.start_time, '%Y-%m-%d %H:%M:%S')
+        dt = DateTime(self.start_time, DateTime.TAI)
         return dt

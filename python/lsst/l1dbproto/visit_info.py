@@ -20,8 +20,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-import datetime
 from typing import NamedTuple, Optional
+
+from lsst.daf.base import DateTime
 
 
 class VisitInfo(NamedTuple):
@@ -30,7 +31,7 @@ class VisitInfo(NamedTuple):
     visitId: int
     """Visit ID, serial integer"""
 
-    visitTime: datetime.datetime
+    visitTime: DateTime
     """Visit time"""
 
     lastObjectId: int
@@ -69,12 +70,12 @@ class VisitInfoStore:
         if len(words) != 4:
             raise ValueError(f"Unexpected content of {self.path}: `{data}`")
         visitId = int(words[0])
-        visitTime = datetime.datetime.fromisoformat(words[1])
+        visitTime = DateTime(words[1], DateTime.TAI)
         lastObjectId = int(words[2])
         lastSourceId = int(words[3])
         return VisitInfo(visitId, visitTime, lastObjectId, lastSourceId)
 
-    def saveVisit(self, visitId: int, visitTime: datetime.datetime, lastObjectId: int, lastSourceId: int
+    def saveVisit(self, visitId: int, visitTime: DateTime, lastObjectId: int, lastSourceId: int
                   ) -> None:
         """Store visit information.
 
@@ -90,5 +91,5 @@ class VisitInfoStore:
             Highest existing DIASource ID
         """
         with open(self.path, "w") as file:
-            isoTime = visitTime.isoformat()
+            isoTime = visitTime.toString(DateTime.TAI)
             file.write(f"{visitId} {isoTime} {lastObjectId} {lastSourceId}")
