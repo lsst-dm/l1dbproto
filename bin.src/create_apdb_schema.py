@@ -31,7 +31,7 @@ from argparse import ArgumentParser
 import logging
 import sys
 
-from lsst.dax.apdb import Apdb
+from lsst.dax.apdb import ApdbSql
 from lsst.l1dbproto import L1dbprotoConfig
 
 
@@ -65,7 +65,7 @@ def main():
         config.load(args.config)
 
     # instantiate db interface
-    db = Apdb(config=config)
+    db = ApdbSql(config=config)
 
     # do it
     db.makeSchema(drop=args.drop)

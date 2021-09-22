@@ -43,7 +43,7 @@ from lsst.daf.base import DateTime
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
 from .visit_info import VisitInfoStore
-from lsst.dax.apdb import (Apdb, timer)
+from lsst.dax.apdb import Apdb, ApdbSql, timer
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 
 
@@ -147,7 +147,7 @@ class APProto(object):
             return 0
 
         # instantiate db interface
-        db = Apdb(self.config)
+        db = ApdbSql(self.config)
         visitInfoStore = VisitInfoStore(self.args.visits_file)
 
         if self.config.divide > 1:
