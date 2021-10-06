@@ -21,9 +21,11 @@
 
 """Module defining DIA class and related methods.
 """
+from __future__ import annotations
 
 import math
 import numpy
+from typing import Tuple
 
 from . import generators
 
@@ -35,7 +37,7 @@ class DIA(object):
     This class is responsible for producing a set of DiaSources and
     DiaForcedSources.
     """
-    def __init__(self, xyz, open_angle, vars, n_trans):
+    def __init__(self, xyz: numpy.ndarray, open_angle: float, vars: numpy.ndarray, n_trans: int):
         """
         @param xyz:  unit vector giving pointing direction
         @param open_angle: opening angle (full) of FOV, radians
@@ -48,7 +50,7 @@ class DIA(object):
         self._vars = vars
         self._n_trans = n_trans
 
-    def makeSources(self):
+    def makeSources(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
         """
         Generate a set of DiaSources.
 

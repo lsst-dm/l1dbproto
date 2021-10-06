@@ -29,20 +29,22 @@ a database.
 __all__ = ["APProto"]
 
 from argparse import ArgumentParser
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 import os
+import pandas
 import sys
 import time
+from typing import Any, cast, Iterator, List, Optional, Tuple
 
 from mpi4py import MPI
 import numpy
-import lsst.afw.table as afwTable
+from lsst.daf.base import DateTime
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
-from lsst.dax.apdb import (Apdb, make_minimal_dia_object_schema,
-                           make_minimal_dia_source_schema, timer)
-from lsst.sphgeom import Angle, Circle, HtmPixelization, LonLat, UnitVector3d, Vector3d
+from .visit_info import VisitInfoStore
+from lsst.dax.apdb import Apdb, ApdbSql, timer
+from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 
 
 COLOR_RED = '\033[1;31m'
@@ -57,7 +59,7 @@ COLOR_RESET = '\033[0m'
 _LOG = logging.getLogger('ap_proto')
 
 
-def _configLogger(verbosity):
+def _configLogger(verbosity: int) -> None:
     """
     Configure logging based on verbosity level.
     """
@@ -68,24 +70,25 @@ def _configLogger(verbosity):
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
 
-def _isDayTime(dt):
+def _isDayTime(dt: DateTime) -> bool:
     """
     Returns true if time is not good for observing.
     """
-    return 6 <= dt.hour < 20
+    return 6 <= dt.toPython(DateTime.TAI).hour < 20
 
 
-def _visitTimes(start_time, interval_sec, count):
+def _visitTimes(start_time: DateTime, interval_sec: int, count: int) -> Iterator[DateTime]:
     """
     Generator for visit times.
     """
-    dt = start_time
-    delta = timedelta(seconds=interval_sec)
+    nsec = start_time.nsecs(DateTime.TAI)
+    delta = interval_sec * 1_000_000_000
     while count > 0:
+        dt = DateTime(nsec, DateTime.TAI)
         if not _isDayTime(dt):
             yield dt
             count -= 1
-        dt += delta
+        nsec += delta
 
 # def _utc_seconds(dt):
 #     """Convert datetime to POSIX seconds
@@ -104,7 +107,7 @@ class APProto(object):
     """Implementation of Alert Production prototype.
     """
 
-    def __init__(self, argv):
+    def __init__(self, argv: List[str]):
 
         self.lastObjectId = _TRANSIENT_START_ID
         self.lastSourceId = 0
@@ -114,7 +117,9 @@ class APProto(object):
         parser.add_argument('-v', '--verbose', dest='verbose', action='count', default=0,
                             help='More verbose output, can use several times.')
         parser.add_argument('-n', '--num-visits', type=int, default=1, metavar='NUMBER',
-                            help='Numer of visits to process, def: 1')
+                            help='Number of visits to process, def: 1')
+        parser.add_argument('-f', '--visits-file', default="ap_proto_visits.dat", metavar='PATH',
+                            help='File to keep visit information, def: %(default)s')
         parser.add_argument('-c', '--config', default=None, metavar='PATH',
                             help='Name of the database config file (pex.config)')
         parser.add_argument('-d', '--dump-config', default=False, action="store_true",
@@ -130,7 +135,7 @@ class APProto(object):
 
         self.config = L1dbprotoConfig()
 
-    def run(self):
+    def run(self) -> Optional[int]:
         """Run whole shebang.
         """
 
@@ -142,7 +147,8 @@ class APProto(object):
             return 0
 
         # instantiate db interface
-        db = Apdb(self.config)
+        db = ApdbSql(self.config)
+        visitInfoStore = VisitInfoStore(self.args.visits_file)
 
         if self.config.divide > 1:
             # check that we have reasonable MPI setup
@@ -159,20 +165,21 @@ class APProto(object):
                                      f"does not match number of tiles ({num_tiles})")
                 if rank != 0:
                     # run simple loop for all non-master processes
-                    return self.run_mpi_tile_loop(db, comm)
+                    self.run_mpi_tile_loop(db, comm)
+                    return None
 
         # Initialize starting values from database visits table
-        last_visit = db.lastVisit()
+        last_visit = visitInfoStore.lastVisit()
         if last_visit is not None:
             start_visit_id = last_visit.visitId + 1
-            start_time = last_visit.visitTime + timedelta(seconds=self.config.interval)
+            nsec = last_visit.visitTime.nsecs(DateTime.TAI) + self.config.interval * 1_000_000_000
+            start_time = DateTime(nsec, DateTime.TAI)
         else:
             start_visit_id = self.config.start_visit_id
             start_time = self.config.start_time_dt
 
         if self.config.divide > 1:
             _LOG.info("Will divide FOV into %dx%d regions", self.config.divide, self.config.divide)
-        _LOG.info("Max. number of ranges for pixelator: %d", self.config.htm_max_ranges)
 
         # read sources file
         _LOG.info("Start loading variable sources from %r", self.config.sources_file)
@@ -311,7 +318,7 @@ class APProto(object):
 
             if not self.args.no_update:
                 # store last visit info
-                db.saveVisit(visit_id, dt)
+                visitInfoStore.saveVisit(visit_id, dt, self.lastObjectId, self.lastSourceId)
 
             _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" +
                       COLOR_RESET, visit_id, loop_timer)
@@ -319,18 +326,18 @@ class APProto(object):
         # stop MPI slaves
         if self.config.divide > 1 and self.config.mp_mode == "mpi":
             _LOG.info("Stopping MPI tile processes")
-            tile_data = [None] * self.config.divide**2
-            self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data)
+            tile_data_stop = [None] * self.config.divide**2
+            self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data_stop)
 
         return 0
 
-    def run_mpi_tile_loop(self, db, comm):
+    def run_mpi_tile_loop(self, db: Apdb, comm: Any) -> None:
         """This is the method executing visit loop inside non-master MPI process
         """
         while self.run_mpi_tile(db, comm):
             pass
 
-    def run_mpi_tile(self, db, comm, tile_data=None):
+    def run_mpi_tile(self, db: Apdb, comm: Any, tile_data: Any = None) -> Any:
         """This is the method executed by each MPI tile process for a single
         visit.
 
@@ -379,15 +386,16 @@ class APProto(object):
                 # return gathered data to root
                 return data
 
-    def visit(self, db, visit_id, dt, region, sources, indices, tile=None):
+    def visit(self, db: Apdb, visit_id: int, dt: DateTime, region: Region,
+              sources: numpy.ndarray, indices: numpy.ndarray, tile: Optional[Tuple[int, int]] = None) -> None:
         """AP processing of a single visit (with known sources)
 
         Parameters
         ----------
         visit_id : `int`
-        dt : `datetime`
+        dt : `DateTime`
             Time of visit
-        region : `sphgem.Region`
+        region : `sphgeom.Region`
             Region, could be the whole FOV (Circle) or small piece of it
         sources : `numpy.array`
             Array of xyz coordinates of sources, this has all visit sources,
@@ -411,12 +419,9 @@ class APProto(object):
 
         with timer.Timer(name+"Objects-read"):
 
-            # determine indices that we need
-            ranges = self._htm_indices(region)
-
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(ranges)
+            latest_objects = db.getDiaObjects(region)
             _LOG.info(name+'database found %s objects', len(latest_objects))
 
             # filter database obects to a mask
@@ -428,26 +433,20 @@ class APProto(object):
             # create all new DiaObjects
             objects = self._makeDiaObjects(sources, indices, dt)
 
-            # do forced photometry on non-detected objects (extends objects)
-            self._forcedPhotometry(objects, latest_objects, dt)
+            # make all sources
+            srcs = self._makeDiaSources(sources, indices, dt, visit_id)
 
-            # Store all sources
-            srcs = self._makeDiaSources(sources, indices, visit_id)
-
-            # make forced sources for every object
-            fsrcs = self._makeDiaForcedSources(objects, visit_id)
+            # do forced photometry (can extends objects)
+            fsrcs = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
 
         with timer.Timer(name+"Source-read"):
 
-            latest_objects_ids = [obj['id'] for obj in latest_objects]
-            if self.config.sources_region:
-                read_srcs = db.getDiaSourcesInRegion(ranges, dt)
-            else:
-                read_srcs = db.getDiaSources(latest_objects_ids, dt)
-            _LOG.info(name+'database found %s sources', len(read_srcs or []))
+            latest_objects_ids = list(latest_objects['diaObjectId'])
+            read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
+            _LOG.info(name+'database found %s sources', 0 if read_srcs is None else len(read_srcs))
 
-            read_srcs = db.getDiaForcedSources(latest_objects_ids, dt)
-            _LOG.info(name+'database found %s forced sources', len(read_srcs or []))
+            read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt)
+            _LOG.info(name+'database found %s forced sources', 0 if read_srcs is None else len(read_srcs))
 
         if not self.args.no_update:
 
@@ -455,53 +454,38 @@ class APProto(object):
 
                 # store new versions of objects
                 _LOG.info(name+'will store %d Objects', len(objects))
-                if objects:
-                    db.storeDiaObjects(objects, dt)
-
-                # store all sources
                 _LOG.info(name+'will store %d Sources', len(srcs))
-                if srcs:
-                    db.storeDiaSources(srcs)
-
-                # store all forced sources
                 _LOG.info(name+'will store %d ForcedSources', len(fsrcs))
-                if fsrcs:
-                    db.storeDiaForcedSources(fsrcs)
+                db.store(dt, objects, srcs, fsrcs)
 
-    def _filterDiaObjects(self, latest_objects, region):
+    def _filterDiaObjects(self, latest_objects: pandas.DataFrame, region: Region) -> pandas.DataFrame:
         """Filter out objects from a catalog which are outside region.
 
         Parameters
         ----------
-        latest_objects : `afw.table.BaseCatalog`
+        latest_objects : `pandas.DataFrame`
             Catalog containing DiaObject records
-        region : `sphgem.Region`
+        region : `sphgeom.Region`
 
         Returns
         -------
-        Filtered `afw.table.BaseCatalog` containing only records contained
+        Filtered `pandas.DataFrame` containing only records contained
         in the region.
         """
-        mask = numpy.ndarray(len(latest_objects), dtype=bool)
-        for i, obj in enumerate(latest_objects):
-            # TODO: For now we use APDB units (degrees), will have to be changed
-            # in case we adopt afw units.
-            lonLat = LonLat.fromRadians(obj['coord_ra'].asRadians(), obj['coord_dec'].asRadians())
+
+        if latest_objects.empty:
+            return latest_objects
+
+        def in_region(obj: Any) -> bool:
+            lonLat = LonLat.fromDegrees(obj['ra'], obj['decl'])
             dir_obj = UnitVector3d(lonLat)
-            mask[i] = region.contains(dir_obj)
+            return region.contains(dir_obj)
 
-        return latest_objects.subset(mask)
+        mask = latest_objects.apply(in_region, axis=1, result_type='reduce')
+        return cast(pandas.DataFrame, latest_objects[mask])
 
-    def _makeDiaObjectSchema(self):
-        """Make afw.table schema for DiaObjects.
-
-        Schema should be compatible with APDB schema and it should contain
-        all fields that have no default values in the schema.
-        """
-        schema = make_minimal_dia_object_schema()
-        return schema
-
-    def _makeDiaObjects(self, sources, indices, dt):
+    def _makeDiaObjects(self, sources: numpy.ndarray, indices: numpy.ndarray, dt: DateTime
+                        ) -> pandas.DataFrame:
         """Over-simplified implementation of source-to-object matching and
         new DiaObject generation.
 
@@ -515,91 +499,92 @@ class APProto(object):
         indices : `numpy.array`
             array of indices of sources, 1-dim ndarray, transient sources
             have negative indices
-        dt : `datetime.datetime`
+        dt : `DateTime`
             Visit time.
 
         Returns
         -------
-        `afw.table.BaseCatalog`
+        catalog : `pandas.DataFrame`
+            Catalog of DiaObjects.
         """
 
-        schema = self._makeDiaObjectSchema()
-        catalog = afwTable.SourceCatalog(schema)
-        n_trans = 0
-        for i in range(len(sources)):
-
-            var_idx = int(indices[i])
-            if var_idx == _OUTSIDER:
-                continue
-
-            xyz = sources[i]
-            if var_idx >= _TRANSIENT_START_ID:
-                n_trans += 1
-
-            v3d = Vector3d(xyz[0], xyz[1], xyz[2])
+        def polar(row: Any) -> pandas.Series:
+            v3d = Vector3d(row.x, row.y, row.z)
             sp = SpherePoint(v3d)
+            return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
+                                 index=["ra", "decl"])
 
-            dir_v = UnitVector3d(v3d)
-            pixelator = HtmPixelization(self.config.htm_level)
-            index = pixelator.index(dir_v)
+        catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
+        catalog["diaObjectId"] = indices
+        catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
 
-            record = catalog.addNew()
-            record.set("id", var_idx)
-            # record.set("validityStart", _utc_seconds(dt))
-            # record.set("validityEnd", 0)
-            # record.set("lastNonForcedSource", _utc_seconds(dt))
-            record.set("coord_ra", sp.getRa())
-            record.set("coord_dec", sp.getDec())
-            record.set("pixelId", index)
+        cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
+        cat_polar["diaObjectId"] = catalog["diaObjectId"]
+        catalog = cat_polar
+
+        n_trans = sum(catalog["diaObjectId"] >= _TRANSIENT_START_ID)
 
         _LOG.info('found %s matching objects and %s transients/noise', len(catalog) - n_trans, n_trans)
 
         return catalog
 
-    def _forcedPhotometry(self, objects, latest_objects, dt):
+    def _forcedPhotometry(self, objects: pandas.DataFrame, latest_objects: pandas.DataFrame,
+                          dt: DateTime, visit_id: int) -> pandas.DataFrame:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
 
         Parameters
         ----------
-        objects : `afw.table.BaseCatalog`
+        objects : `pandas.DataFrame`
             Catalog containing DiaObject records
-        latest_objects : `afw.table.BaseCatalog`
+        latest_objects : `pandas.DataFrame`
             Catalog containing DiaObject records
+        dt : `DateTime`
+            Visit time.
+        visit_id : `int`
+            Visit ID.
         """
+
+        midPointTai = dt.get(system=DateTime.MJD)
+
+        if objects.empty:
+            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midPointTai", "flags"])
 
         # Ids of the detected objects
-        ids = set(obj['id'] for obj in objects)
+        ids = set(objects['diaObjectId'])
 
-        for obj in latest_objects:
-            # only do it for 30 days after last detection
-            if obj['id'] in ids:
-                continue
-            lastNonForcedSource = datetime.utcfromtimestamp(obj['lastNonForcedSource'])
-            delta = dt - lastNonForcedSource
-            if delta > timedelta(days=30):
-                continue
+        # do forced photometry for all detected DiaObjects
+        df1 = pandas.DataFrame({
+            "diaObjectId": objects["diaObjectId"],
+            "ccdVisitId": visit_id,
+            "midPointTai": midPointTai,
+            "flags": 0,
+        })
 
-            record = objects.addNew()
-            record.set("id", obj['id'])
-            # record.set("validityStart", _utc_seconds(dt))
-            # record.set("validityEnd", 0)
-            # record.set("lastNonForcedSource", obj['lastNonForcedSource'])
-            record.set("coord_ra", obj["coord_ra"])
-            record.set("coord_dec", obj["coord_dec"])
-            record.set("pixelId", obj["pixelId"])
+        # do forced photometry for non-detected DiaObjects (newer than cutoff)
+        o1 = cast(pandas.DataFrame, latest_objects[~latest_objects["diaObjectId"].isin(ids)])
 
-    def _makeDiaSourceSchema(self):
-        """Make afw.table schema for DiaSource.
+        # only do it for 30 days after last detection
+        cutoff = dt.toPython() - timedelta(days=self.config.forced_cutoff_days)
+        o1 = cast(pandas.DataFrame, o1[o1["lastNonForcedSource"] > cutoff])
 
-        Schema should be compatible with APDB schema and it should contain
-        all fields that have no default values in the schema.
-        """
-        schema = make_minimal_dia_source_schema()
-        return schema
+        if o1.empty:
+            catalog = df1
+        else:
+            df2 = pandas.DataFrame({
+                "diaObjectId": o1["diaObjectId"],
+                "ccdVisitId": visit_id,
+                "midPointTai": midPointTai,
+                "flags": 0,
+            })
 
-    def _makeDiaSources(self, sources, indices, visit_id):
+            catalog = pandas.concat([df1, df2])
+
+        return catalog
+
+    def _makeDiaSources(self, sources: numpy.ndarray, indices: numpy.ndarray,
+                        dt: DateTime, visit_id: int) -> pandas.DataFrame:
         """Generate catalog of DiaSources to store in a database
 
         Parameters
@@ -609,112 +594,41 @@ class APProto(object):
         indices : `numpy.array`
             array of indices of sources, 1-dim ndarray, transient sources
             have negative indices
+        dt : `DateTime`
+            Visit time.
         visit_id : `int`
             ID of the visit
 
         Returns
         -------
-        `afw.table.BaseCatalog`
+        catalog : `pandas.DataFrame`
+            Catalog of DIASources.
         """
 
-        schema = self._makeDiaSourceSchema()
-        catalog = afwTable.BaseCatalog(schema)
-        for i in range(len(sources)):
-
-            var_idx = int(indices[i])
-            if var_idx == _OUTSIDER:
-                continue
-
-            xyz = sources[i]
-            v3d = Vector3d(xyz[0], xyz[1], xyz[2])
+        def polar(row: Any) -> pandas.Series:
+            v3d = Vector3d(row.x, row.y, row.z)
             sp = SpherePoint(v3d)
+            return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
+                                 index=["ra", "decl"])
 
-            dir_v = UnitVector3d(v3d)
-            pixelator = HtmPixelization(self.config.htm_level)
-            index = pixelator.index(dir_v)
+        midPointTai = dt.get(system=DateTime.MJD)
 
-            self.lastSourceId += 1
+        catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
+        catalog["diaObjectId"] = indices
+        catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
 
-            record = catalog.addNew()
-            record.set("id", self.lastSourceId)
-            record.set("ccdVisitId", visit_id)
-            record.set("diaObjectId", var_idx)
-            record.set("parent", 0)
-            record.set("coord_ra", sp.getRa())
-            record.set("coord_dec", sp.getDec())
-            record.set("flags", 0)
-            record.set("pixelId", index)
+        cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
+        cat_polar["diaObjectId"] = catalog["diaObjectId"]
+        catalog = cat_polar
+        catalog["ccdVisitId"] = visit_id
+        catalog["parentDiaSourceId"] = 0
+        catalog["psFlux"] = 1.
+        catalog["psFluxErr"] = 0.01
+        catalog["midPointTai"] = midPointTai
+        catalog["flags"] = 0
 
-        return catalog
-
-    def _makeDiaForcedSourceSchema(self):
-        """Make afw.table schema for DiaForcedSource.
-
-        Schema should be compatible with APDB schema and it should contain
-        all fields that have no default values in the schema.
-        """
-        schema = afwTable.Schema()
-
-        # APDB-specific stuff
-        schema.addField("diaObjectId", "L")
-        schema.addField("ccdVisitId", "L")
-        schema.addField("flags", "L")
-
-        return schema
-
-    def _makeDiaForcedSources(self, objects, visit_id):
-        """Generate catalog of DiaForcedSources to store in a database.
-
-        Parameters
-        ----------
-        objects : `afw.table.BaseCatalog`
-            Catalog containing DiaObject records
-        visit_id : `int`
-            ID of the visit
-
-        Returns
-        -------
-        `afw.table.BaseCatalog`
-        """
-
-        schema = self._makeDiaForcedSourceSchema()
-        catalog = afwTable.BaseCatalog(schema)
-        for obj in objects:
-
-            record = catalog.addNew()
-            record.set("diaObjectId", obj['id'])
-            record.set("ccdVisitId", visit_id)
-            record.set("flags", 0)
+        nrows = catalog.shape[0]
+        catalog["diaSourceId"] = range(self.lastSourceId + 1, self.lastSourceId + 1 + nrows)
+        self.lastSourceId += nrows
 
         return catalog
-
-    def _htm_indices(self, region):
-        """Generate a set of HTM indices covering specified field of view.
-
-        Parameters
-        ----------
-        region: `sphgeom.Region`
-            Region that needs to be indexed
-
-        Returns
-        -------
-        Sequence of ranges, range is a tuple (minHtmID, maxHtmID).
-        """
-
-        _LOG.debug('region: %s', region)
-        pixelator = HtmPixelization(self.config.htm_level)
-        indices = pixelator.envelope(region, self.config.htm_max_ranges)
-        for irange in indices.ranges():
-            _LOG.debug('range: %s %s', pixelator.toString(irange[0]),
-                       pixelator.toString(irange[1]))
-
-        return indices.ranges()
-
-
-#
-#  run application when imported as a main module
-#
-if __name__ == "__main__":
-    app = APProto()
-    rc = app.run()
-    sys.exit(rc)

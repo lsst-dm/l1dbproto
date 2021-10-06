@@ -24,14 +24,14 @@
 
 __all__ = ["L1dbprotoConfig"]
 
-import datetime
 import math
 
-from lsst.dax.apdb import ApdbConfig
+from lsst.daf.base import DateTime
+from lsst.dax.apdb import ApdbSqlConfig
 from lsst.pex.config import Field, ChoiceField
 
 
-class L1dbprotoConfig(ApdbConfig):
+class L1dbprotoConfig(ApdbSqlConfig):
 
     FOV_deg = Field(dtype=float,
                     doc="FOV in degrees",
@@ -42,26 +42,21 @@ class L1dbprotoConfig(ApdbConfig):
     false_per_visit = Field(dtype=int,
                             doc="average number of false positives per visit",
                             default=5050)
-    htm_level = Field(dtype=int,
-                      doc="HTM indexing level",
-                      default=20)
-    htm_max_ranges = Field(dtype=int,
-                           doc="Max number of ranges in HTM envelope",
-                           default=64)
     divide = Field(dtype=int,
                    doc="Divide FOV into NUM*NUM tiles for parallel processing",
                    default=1)
     interval = Field(dtype=int,
                      doc='Interval between visits in seconds, def: 45',
                      default=45)
-    sources_region = Field(dtype=bool,
-                           default=False,
-                           doc='Use region-based select for DiaSource')
+    forced_cutoff_days = Field(dtype=int,
+                               doc=("Period after which we stop forced photometry "
+                                    "if there was no observed source, def: 30"),
+                               default=30)
     start_time = Field(dtype=str,
-                       default="2020-01-01 03:00:00",
-                       doc=('Starting time, format: YYYY-MM-DD hh:mm:ss'
+                       default="2020-01-01T03:00:00",
+                       doc=('Starting time, format: YYYY-MM-DDThh:mm:ss'
                             '. Time is assumed to be in UTC time zone. Used only at'
-                            ' first invocation to intialize database.'))
+                            ' first invocation to initialize database.'))
     start_visit_id = Field(dtype=int,
                            default=1,
                            doc='Starting visit ID. Used only at first invocation'
@@ -75,14 +70,14 @@ class L1dbprotoConfig(ApdbConfig):
                           default="fork")
 
     @property
-    def FOV_rad(self):
+    def FOV_rad(self) -> float:
         """FOV in radians.
         """
         return self.FOV_deg * math.pi / 180
 
     @property
-    def start_time_dt(self):
-        """start_time as datetime.
+    def start_time_dt(self) -> DateTime:
+        """start_time as DateTime.
         """
-        dt = datetime.datetime.strptime(self.start_time, '%Y-%m-%d %H:%M:%S')
+        dt = DateTime(self.start_time, DateTime.TAI)
         return dt

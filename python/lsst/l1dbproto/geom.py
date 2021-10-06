@@ -21,9 +21,12 @@
 
 """Module defining methods for handling geometry.
 """
+from __future__ import annotations
+
 import logging
 import math
 import numpy as np
+from typing import List, Tuple
 
 import lsst.sphgeom as sph
 
@@ -31,7 +34,7 @@ import lsst.sphgeom as sph
 _LOG = logging.getLogger('ap_proto')
 
 
-def rotation_matrix(a, b):
+def rotation_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """
     Create rotation matrix to rotate vector a into b.
 
@@ -55,7 +58,10 @@ def rotation_matrix(a, b):
     return R
 
 
-def make_square_tiles(open_angle, nx, ny, direction=np.array([0., 0., 1.]), exclude_disjoint=True):
+def make_square_tiles(open_angle: float, nx: int, ny: int,
+                      direction: np.ndarray = np.array([0., 0., 1.]),
+                      exclude_disjoint: bool = True
+                      ) -> List[Tuple[int, int, sph.ConvexPolygon]]:
     """Generate mosaic of square tiles covering round patch of sky.
 
     Returns the list of tiles, each tile is represented by a tuple containg
