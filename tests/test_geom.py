@@ -34,13 +34,13 @@ import lsst.sphgeom as sph
 
 class TestGeom(unittest.TestCase):
 
-    def setUp(self):
+    def setUp(self) -> None:
         pass
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         pass
 
-    def test_rot_matrix(self):
+    def test_rot_matrix(self) -> None:
         """ Testing rotation matrix method """
 
         a = np.array([0., 0., 1.])
@@ -60,7 +60,7 @@ class TestGeom(unittest.TestCase):
         expected = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=float)
         self.assertTrue(np.array_equal(R, expected))
 
-    def test_make_square_tiles(self):
+    def test_make_square_tiles(self) -> None:
 
         tiles = geom.make_square_tiles(3.5 * math.pi / 180, 2, 2)
         self.assertEqual(len(tiles), 4)

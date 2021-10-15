@@ -31,8 +31,7 @@ from argparse import ArgumentParser
 import logging
 import sys
 
-from lsst.dax.apdb import (Apdb, ApdbConfig, ApdbCassandra, ApdbCassandraConfig,
-                           make_minimal_dia_object_schema, make_minimal_dia_source_schema)
+from lsst.dax.apdb import (ApdbSql, ApdbSqlConfig, ApdbCassandra, ApdbCassandraConfig)
 
 
 def _configLogger(verbosity):
@@ -58,27 +57,14 @@ def main():
                         help='Drop existing schema first, this will delete '
                         'all data in the tables, use with extreme caution')
     parser.add_argument('-c', '--config', default=None, metavar='PATH',
-                        help='Name of the APDB config file (pex.config format)')
-    parser.add_argument('-t', '--tablespace', default=None, metavar='TABLESPACE',
-                        help='Name of the Oracle tablespace for new tables.')
-    parser.add_argument('-i', '--iot', default=False,
-                        action='store_true',
-                        help='Make index-organized DiaObjectLast table.')
-    parser.add_argument('-a', '--association', default=False,
-                        action='store_true',
-                        help='Use afw.table schema from ap_association')
+                        help='Name of the database config file (pex.config)')
     args = parser.parse_args()
 
     # configure logging
     _configLogger(args.verbose)
 
-    afw_schemas = None
-    if args.association:
-        afw_schemas = dict(DiaObject=make_minimal_dia_object_schema(),
-                           DiaSource=make_minimal_dia_source_schema())
-
     if args.backend == "sql":
-        config = ApdbConfig()
+        config = ApdbSqlConfig()
         if args.config:
             config.load(args.config)
         if args.dump_config:
@@ -86,7 +72,7 @@ def main():
             return 0
 
         # instantiate db interface
-        db = Apdb(config=config, afw_schemas=afw_schemas)
+        db = ApdbSql(config=config)
 
     elif args.backend == "cassandra":
 
@@ -98,10 +84,10 @@ def main():
             return 0
 
         # instantiate db interface
-        db = ApdbCassandra(config=config, afw_schemas=afw_schemas)
+        db = ApdbCassandra(config=config)
 
     # do it
-    db.makeSchema(drop=args.drop, oracle_tablespace=args.tablespace, oracle_iot=args.iot)
+    db.makeSchema(drop=args.drop)
 
 
 #

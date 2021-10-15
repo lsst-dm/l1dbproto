@@ -33,13 +33,13 @@ from lsst.l1dbproto import generators
 
 class TestGenerators(unittest.TestCase):
 
-    def setUp(self):
+    def setUp(self) -> None:
         pass
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         pass
 
-    def test_sphere_xyz(self):
+    def test_sphere_xyz(self) -> None:
         """ Test for points-on-sphere generator """
 
         points = generators.rand_sphere_xyz(1)
@@ -61,7 +61,7 @@ class TestGenerators(unittest.TestCase):
         points = generators.rand_sphere_xyz(100, hemi=-1)
         self.assertLess(max(points[:, 2]), 0)
 
-    def test_cone_xyz(self):
+    def test_cone_xyz(self) -> None:
         """ Test for vector-in-cone generator """
 
         points = generators.rand_cone_xyz(numpy.array([0., 0., 1.]), 0., 1)
