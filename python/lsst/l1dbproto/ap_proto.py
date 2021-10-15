@@ -271,9 +271,10 @@ class APProto(object):
             # so only do it once in a while
             modu = 200 if visit_id <= 10000 else 1000
             if visit_id % modu == 0:
-                counts = db.tableRowCount()
-                for tbl, count in sorted(counts.items()):
-                    _LOG.info('%s row count: %s', tbl, count)
+                if hasattr(db, "tableRowCount"):
+                    counts = db.tableRowCount()
+                    for tbl, count in sorted(counts.items()):
+                        _LOG.info('%s row count: %s', tbl, count)
 
             # numpy seems to do some multi-threaded stuff which "leaks" CPU cycles to the code below
             # and it gets counted as resource usage in timers, add a short delay here so that threads
