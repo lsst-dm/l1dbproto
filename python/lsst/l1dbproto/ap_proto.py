@@ -602,16 +602,6 @@ class APProto(object):
             "flags": 0,
         })
 
-        tmp_ids = sorted(objects["diaObjectId"])
-        tmp_ids = [tmp_ids[i] for i in range(len(tmp_ids) - 1) if tmp_ids[i] == tmp_ids[i + 1]]
-        if tmp_ids:
-            _LOG.error("objects have non-unique IDs: %s", tmp_ids)
-
-        tmp_ids = sorted(latest_objects["diaObjectId"])
-        tmp_ids = [tmp_ids[i] for i in range(len(tmp_ids) - 1) if tmp_ids[i] == tmp_ids[i + 1]]
-        if tmp_ids:
-            _LOG.error("latest_objects have non-unique IDs: %s", tmp_ids)
-
         # do forced photometry for non-detected DiaObjects (newer than cutoff)
         o1 = cast(pandas.DataFrame, latest_objects[~latest_objects["diaObjectId"].isin(ids)])
 
@@ -631,12 +621,6 @@ class APProto(object):
 
             catalog = pandas.concat([df1, df2])
 
-            tmp_ids = sorted(catalog["diaObjectId"])
-            tmp_ids = [tmp_ids[i] for i in range(len(tmp_ids) - 1) if tmp_ids[i] == tmp_ids[i + 1]]
-            if tmp_ids:
-                _LOG.error("catalog has non-unique IDs: %s", tmp_ids)
-
-        _LOG.debug("diaObjectId: %s", sorted(catalog["diaObjectId"]))
         return catalog
 
     def _makeDiaSources(self, sources: numpy.ndarray, indices: numpy.ndarray,
