@@ -470,7 +470,7 @@ class APProto(object):
             srcs = self._makeDiaSources(sources, indices, dt, visit_id)
 
             # do forced photometry (can extends objects)
-            fsrcs = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
+            fsrcs, objects = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
 
         if do_read_src:
             with timer.Timer(name+"Source-read"):
@@ -569,7 +569,7 @@ class APProto(object):
         return catalog
 
     def _forcedPhotometry(self, objects: pandas.DataFrame, latest_objects: pandas.DataFrame,
-                          dt: DateTime, visit_id: int) -> pandas.DataFrame:
+                          dt: DateTime, visit_id: int) -> Tuple[pandas.DataFrame, pandas.DataFrame]:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
@@ -589,7 +589,7 @@ class APProto(object):
         midPointTai = dt.get(system=DateTime.MJD)
 
         if objects.empty:
-            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midPointTai", "flags"])
+            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midPointTai", "flags"]), objects
 
         # Ids of the detected objects
         ids = set(objects['diaObjectId'])
@@ -619,9 +619,19 @@ class APProto(object):
                 "flags": 0,
             })
 
+            # extend forced sources
             catalog = pandas.concat([df1, df2])
 
-        return catalog
+            # also extend objects
+            o2 = pandas.DataFrame({
+                "diaObjectId": o1["diaObjectId"],
+                "ra": o1["ra"],
+                "decl": o1["decl"],
+            })
+            objects = objects.append(o2)
+
+
+        return catalog, objects
 
     def _makeDiaSources(self, sources: numpy.ndarray, indices: numpy.ndarray,
                         dt: DateTime, visit_id: int) -> pandas.DataFrame:
