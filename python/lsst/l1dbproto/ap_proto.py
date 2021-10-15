@@ -91,10 +91,8 @@ def _visitTimes(start_time: DateTime, interval_sec: int, count: int) -> Iterator
         nsec += delta
 
 
-def _nrows(table):
-    if isinstance(table, pandas.DataFrame):
-        return table.shape[0]
-    elif table is None:
+def _nrows(table: Optional[pandas.DataFrame]) -> int:
+    if table is None:
         return 0
     else:
         return len(table)
@@ -166,6 +164,7 @@ class APProto(object):
             return 0
 
         # instantiate db interface
+        db: Apdb
         if self.args.backend == "sql":
             db = ApdbSql(config=self.dbconfig)
         elif self.args.backend == "cassandra":
@@ -272,7 +271,7 @@ class APProto(object):
             modu = 200 if visit_id <= 10000 else 1000
             if visit_id % modu == 0:
                 if hasattr(db, "tableRowCount"):
-                    counts = db.tableRowCount()
+                    counts = db.tableRowCount()  # type: ignore
                     for tbl, count in sorted(counts.items()):
                         _LOG.info('%s row count: %s', tbl, count)
 
@@ -476,10 +475,7 @@ class APProto(object):
         if do_read_src:
             with timer.Timer(name+"Source-read"):
 
-                if isinstance(latest_objects, pandas.DataFrame):
-                    latest_objects_ids = list(latest_objects['diaObjectId'])
-                else:
-                    latest_objects_ids = [obj['id'] for obj in latest_objects]
+                latest_objects_ids = list(latest_objects['diaObjectId'])
 
                 read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
                 _LOG.info(name+'database found %s sources', _nrows(read_srcs))
@@ -630,7 +626,6 @@ class APProto(object):
                 "decl": o1["decl"],
             })
             objects = objects.append(o2)
-
 
         return catalog, objects
 

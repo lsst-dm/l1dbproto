@@ -65,7 +65,7 @@ def make_square_tiles(open_angle: float, nx: int, ny: int,
                       ) -> List[Tuple[int, int, sph.ConvexPolygon]]:
     """Generate mosaic of square tiles covering round patch of sky.
 
-    Returns the list of tiles, each tile is represented by a tuple containg
+    Returns the list of tiles, each tile is represented by a tuple containing
     three elements: division index for x axis, division index for y axis, and
     `sphgeom.ConvexPolygon` object.
 
@@ -133,7 +133,7 @@ def make_square_tiles(open_angle: float, nx: int, ny: int,
 
             # make a tile and check that it overlaps with cone
             tile = sph.ConvexPolygon([c00, c01, c11, c10])
-            if exclude_disjoint:
+            if cone is not None:
                 relation = cone.relate(tile)
                 if not relation & sph.DISJOINT:
                     tiles.append((ix, iy, tile))
@@ -143,10 +143,11 @@ def make_square_tiles(open_angle: float, nx: int, ny: int,
     return tiles
 
 
-def make_camera_tiles(open_angle, ndiv, direction=np.array([0., 0., 1.]), rot_rad=None):
+def make_camera_tiles(open_angle: float, ndiv: int, direction: np.ndarray = np.array([0., 0., 1.]),
+                      rot_rad: Optional[float] = None) -> List[Tuple[int, int, sph.ConvexPolygon]]:
     """Generate mosaic of square tiles in the shape of LSST camera.
 
-    Returns the list of tiles, each tile is represented by a tuple containg
+    Returns the list of tiles, each tile is represented by a tuple containing
     three elements: division index for x axis, division index for y axis, and
     `sphgeom.ConvexPolygon` object.
 
@@ -191,7 +192,8 @@ def make_camera_tiles(open_angle, ndiv, direction=np.array([0., 0., 1.]), rot_ra
     return tiles
 
 
-def make_tiles(open_angle, ndiv, direction=np.array([0., 0., 1.]), rot_rad=None):
+def make_tiles(open_angle: float, ndiv: int, direction: np.ndarray = np.array([0., 0., 1.]),
+               rot_rad: Optional[float] = None) -> List[Tuple[int, int, sph.ConvexPolygon]]:
     """Generate mosaic of square tiles in the shape of LSST camera.
 
     If ``ndiv`` is positive it calls `make_square_tiles` with both ``nx`` and
@@ -206,8 +208,8 @@ def make_tiles(open_angle, ndiv, direction=np.array([0., 0., 1.]), rot_rad=None)
         return make_square_tiles(open_angle, ndiv, ndiv, direction=direction, rot_rad=rot_rad)
 
 
-def poly_area(polygon):
-    """Calculate area ov a convex polygon.
+def poly_area(polygon: sph.ConvexPolygon) -> float:
+    """Calculate area of a convex polygon.
 
     Parameters
     ----------
@@ -225,7 +227,7 @@ def poly_area(polygon):
     return area
 
 
-def triangle_area(v0, v1, v2):
+def triangle_area(v0: sph.UnitVector3d, v1: sph.UnitVector3d, v2: sph.UnitVector3d) -> float:
     """Calculate triangle area.
 
     Parameters
