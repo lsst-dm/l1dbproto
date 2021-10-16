@@ -39,10 +39,11 @@ from typing import Any, cast, Iterator, List, Optional, Tuple
 
 from mpi4py import MPI
 import numpy
+import numpy.random
 from lsst.daf.base import DateTime
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
-from lsst.dax.apdb import Apdb, ApdbSql, ApdbSqlConfig, ApdbCassandra, ApdbCassandraConfig, timer
+from lsst.dax.apdb import Apdb, ApdbSql, ApdbSqlConfig, ApdbCassandra, ApdbCassandraConfig, timer, ApdbTables
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 from .visit_info import VisitInfoStore
 
@@ -421,7 +422,10 @@ class APProto(object):
 
         Parameters
         ----------
+        db : `Apdb`
+            APDB interface
         visit_id : `int`
+            Visit ID.
         dt : `DateTime`
             Time of visit
         region : `sphgeom.Region`
@@ -471,6 +475,11 @@ class APProto(object):
 
             # do forced photometry (can extends objects)
             fsrcs, objects = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
+
+            if self.config.fill_empty_fields:
+                self._fillRandomData(objects, ApdbTables.DiaObject, db)
+                self._fillRandomData(srcs, ApdbTables.DiaSource, db)
+                self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
 
         if do_read_src:
             with timer.Timer(name+"Source-read"):
@@ -678,3 +687,49 @@ class APProto(object):
         self.lastSourceId += nrows
 
         return catalog
+
+    def _fillRandomData(self, catalog: pandas.DataFrame, table: ApdbTables, db: Apdb) -> None:
+        """Add missing fields to a catalog and fill it with random numbers.
+
+        Parameters
+        ----------
+        catalog : `pandas.DataFrame`
+            Catalog to extend and fill.
+        table : `ApdbTables`
+            Table type.
+        db : `Apdb`
+            APDB interface
+        """
+        rng = numpy.random.default_rng()
+        table_def = db.tableDef(table)
+        if table_def is None:
+            return
+        count = len(catalog)
+        for colDef in table_def.columns:
+            if table is ApdbTables.DiaObject and colDef.name in ("validityStart", "validityEnd"):
+                continue
+            if colDef.name == "pixelId":
+                continue
+            if colDef.name not in catalog.columns:
+                # need to make a new column
+                if colDef.type == "FLOAT":
+                    data = rng.random(count, dtype=numpy.float32)
+                elif colDef.type == "DOUBLE":
+                    data = rng.random(count, dtype=numpy.float64)
+                elif colDef.type == "INT":
+                    data = rng.integers(0, 1000, count, dtype=numpy.int32)
+                elif colDef.type == "BIGINT":
+                    data = rng.integers(0, 1000, count, dtype=numpy.int64)
+                elif colDef.type == "SMALLINT":
+                    data = rng.integers(0, 1000, count, dtype=numpy.int16)
+                elif "INT" in colDef.type:
+                    data = rng.integers(0, 100, count)
+                elif colDef.type == "BLOB":
+                    # random bytes
+                    data = pandas.Series([rng.bytes(100) for i in range(count)])
+                elif colDef.type == "DATETIME":
+                    data = rng.integers(1500000000, 1600000000, count, dtype=numpy.int64)
+                    data = numpy.array(data, dtype="datetime64[s]")
+                else:
+                    data = rng.random(count)
+                catalog[colDef.name] = data

@@ -81,6 +81,10 @@ class L1dbprotoConfig(Config):
         doc=("Period for repating read/no-read cycles for (forced) sources."),
         default=1000
     )
+    fill_empty_fields = Field(
+        dtype=bool,
+        doc="If True then store random values for fields not explicitly filled.",
+        default=False)
 
     @property
     def FOV_rad(self) -> float:
