@@ -31,8 +31,7 @@ from argparse import ArgumentParser
 import logging
 import sys
 
-from lsst.dax.apdb import ApdbSql
-from lsst.l1dbproto import L1dbprotoConfig
+from lsst.dax.apdb import (ApdbSql, ApdbSqlConfig, ApdbCassandra, ApdbCassandraConfig)
 
 
 def _configLogger(verbosity):
@@ -50,6 +49,10 @@ def main():
     parser = ArgumentParser(description=descr)
     parser.add_argument('-v', '--verbose', action='count', default=0,
                         help='More verbose output, can use several times.')
+    parser.add_argument('--backend', default="sql", choices=["sql", "cassandra"],
+                        help='Backend type, def: %(default)s')
+    parser.add_argument('-d', '--dump-config', default=False, action="store_true",
+                        help='Dump configuration to standard output and quit.')
     parser.add_argument('--drop', action='store_true', default=False,
                         help='Drop existing schema first, this will delete '
                         'all data in the tables, use with extreme caution')
@@ -60,12 +63,28 @@ def main():
     # configure logging
     _configLogger(args.verbose)
 
-    config = L1dbprotoConfig()
-    if args.config:
-        config.load(args.config)
+    if args.backend == "sql":
+        config = ApdbSqlConfig()
+        if args.config:
+            config.load(args.config)
+        if args.dump_config:
+            config.saveToStream(sys.stdout)
+            return 0
 
-    # instantiate db interface
-    db = ApdbSql(config=config)
+        # instantiate db interface
+        db = ApdbSql(config=config)
+
+    elif args.backend == "cassandra":
+
+        config = ApdbCassandraConfig()
+        if args.config:
+            config.load(args.config)
+        if args.dump_config:
+            config.saveToStream(sys.stdout)
+            return 0
+
+        # instantiate db interface
+        db = ApdbCassandra(config=config)
 
     # do it
     db.makeSchema(drop=args.drop)

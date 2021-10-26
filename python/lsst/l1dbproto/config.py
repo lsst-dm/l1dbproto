@@ -27,11 +27,11 @@ __all__ = ["L1dbprotoConfig"]
 import math
 
 from lsst.daf.base import DateTime
-from lsst.dax.apdb import ApdbSqlConfig
+from lsst.pex.config import Config
 from lsst.pex.config import Field, ChoiceField
 
 
-class L1dbprotoConfig(ApdbSqlConfig):
+class L1dbprotoConfig(Config):
 
     FOV_deg = Field(dtype=float,
                     doc="FOV in degrees",
@@ -43,7 +43,10 @@ class L1dbprotoConfig(ApdbSqlConfig):
                             doc="average number of false positives per visit",
                             default=5050)
     divide = Field(dtype=int,
-                   doc="Divide FOV into NUM*NUM tiles for parallel processing",
+                   doc=("Divide FOV into NUM*NUM tiles for parallel processing. "
+                        "If negative means camera style tiling with 5x5 rafts "
+                        "each subdivided in both directions into negated value "
+                        "of this parameter."),
                    default=1)
     interval = Field(dtype=int,
                      doc='Interval between visits in seconds, def: 45',
@@ -66,8 +69,22 @@ class L1dbprotoConfig(ApdbSqlConfig):
                          default="var_sources.npy")
     mp_mode = ChoiceField(dtype=str,
                           allowed=dict(fork="Forking mode", mpi="MPI mode"),
-                          doc='multiprocessing mode, only for `divide > 1`',
+                          doc='multiprocessing mode, only for `divide > 1` or `divide < 0',
                           default="fork")
+    src_read_duty_cycle = Field(
+        dtype=float,
+        doc=("Fraction of visits for which (forced) sources are read from database."),
+        default=1.
+    )
+    src_read_period = Field(
+        dtype=int,
+        doc=("Period for repating read/no-read cycles for (forced) sources."),
+        default=1000
+    )
+    fill_empty_fields = Field(
+        dtype=bool,
+        doc="If True then store random values for fields not explicitly filled.",
+        default=False)
 
     @property
     def FOV_rad(self) -> float:

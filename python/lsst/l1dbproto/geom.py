@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 import math
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import lsst.sphgeom as sph
 
@@ -60,11 +60,12 @@ def rotation_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def make_square_tiles(open_angle: float, nx: int, ny: int,
                       direction: np.ndarray = np.array([0., 0., 1.]),
-                      exclude_disjoint: bool = True
+                      exclude_disjoint: bool = True,
+                      rot_rad: Optional[float] = None
                       ) -> List[Tuple[int, int, sph.ConvexPolygon]]:
     """Generate mosaic of square tiles covering round patch of sky.
 
-    Returns the list of tiles, each tile is represented by a tuple containg
+    Returns the list of tiles, each tile is represented by a tuple containing
     three elements: division index for x axis, division index for y axis, and
     `sphgeom.ConvexPolygon` object.
 
@@ -81,6 +82,8 @@ def make_square_tiles(open_angle: float, nx: int, ny: int,
     exclude_disjoint : `bool`, optional
         If `True` (default) then do not include tiles which have no overlap
         with FOV.
+    rot_rad : `float`, optional
+        Rotation angle in radians for camera around its axis.
 
     Returns
     -------
@@ -91,8 +94,15 @@ def make_square_tiles(open_angle: float, nx: int, ny: int,
 
     # make rotation matrix
     R = rotation_matrix(np.array([0., 0., 1.]), direction)
-    cone = sph.Circle(sph.UnitVector3d(float(direction[0]), float(direction[1]), float(direction[2])),
-                      sph.Angle.fromRadians(half_open_angle))
+    cone = None
+    if exclude_disjoint:
+        cone = sph.Circle(sph.UnitVector3d(float(direction[0]), float(direction[1]), float(direction[2])),
+                          sph.Angle.fromRadians(half_open_angle))
+
+    cam_rot = None
+    if rot_rad is not None:
+        cam_rot = rotation_matrix(np.array([1., 0., 0.]),
+                                  np.array([math.cos(rot_rad), math.sin(rot_rad), 0.]))
 
     # build mosaic at a plane perpendicular to z axis at z=+1
     half_height = math.tan(half_open_angle)
@@ -111,9 +121,11 @@ def make_square_tiles(open_angle: float, nx: int, ny: int,
                                [x0, y1, 1.],
                                [x1, y0, 1.],
                                [x1, y1, 1.]])
+            if cam_rot is not None:
+                points = np.asarray(np.inner(points, cam_rot))
             points = np.asarray(np.inner(points, R))
 
-            # make vectors, those normaliza internally
+            # make vectors, those normalize internally
             c00 = sph.UnitVector3d(points[0][0], points[0][1], points[0][2])
             c01 = sph.UnitVector3d(points[1][0], points[1][1], points[1][2])
             c10 = sph.UnitVector3d(points[2][0], points[2][1], points[2][2])
@@ -121,8 +133,123 @@ def make_square_tiles(open_angle: float, nx: int, ny: int,
 
             # make a tile and check that it overlaps with cone
             tile = sph.ConvexPolygon([c00, c01, c11, c10])
-            relation = cone.relate(tile)
-            if not relation & sph.DISJOINT or not exclude_disjoint:
+            if cone is not None:
+                relation = cone.relate(tile)
+                if not relation & sph.DISJOINT:
+                    tiles.append((ix, iy, tile))
+            else:
                 tiles.append((ix, iy, tile))
 
     return tiles
+
+
+def make_camera_tiles(open_angle: float, ndiv: int, direction: np.ndarray = np.array([0., 0., 1.]),
+                      rot_rad: Optional[float] = None) -> List[Tuple[int, int, sph.ConvexPolygon]]:
+    """Generate mosaic of square tiles in the shape of LSST camera.
+
+    Returns the list of tiles, each tile is represented by a tuple containing
+    three elements: division index for x axis, division index for y axis, and
+    `sphgeom.ConvexPolygon` object.
+
+    Geometry is made of 5x5 rafts with 4 corner rafts missing, and with each
+    raft divided further into ``ndiv`` "CCDs" in each direction. Total number
+    of tiles returned will be ``21 * ndiv**2``.
+
+    Parameters
+    ----------
+    open_angle: `float`
+        opening angle (full) of a cone, radians
+    ndiv: `int`
+        number of divisions of each raft (in each direction)
+    direction:
+        XYZ vector of the cone axis, must be numpy array
+    rot_rad : `float`, optional
+        Rotation angle in radians for camera around its axis.
+
+    Returns
+    -------
+    `list` of 3-tuples
+    """
+
+    nrafts = 5
+
+    # make all tiles
+    gen = make_square_tiles(open_angle, nrafts*ndiv, nrafts*ndiv, direction=direction,
+                            exclude_disjoint=False, rot_rad=rot_rad)
+
+    # strip corners
+    corner1 = set(range(0, ndiv))
+    corner2 = set(range(nrafts*ndiv-ndiv, nrafts*ndiv))
+    tiles = []
+    for ix, iy, tile in gen:
+        if ix in corner1 and iy in corner1 or \
+                ix in corner1 and iy in corner2 or \
+                ix in corner2 and iy in corner1 or \
+                ix in corner2 and iy in corner2:
+            continue
+        tiles.append((ix, iy, tile))
+
+    return tiles
+
+
+def make_tiles(open_angle: float, ndiv: int, direction: np.ndarray = np.array([0., 0., 1.]),
+               rot_rad: Optional[float] = None) -> List[Tuple[int, int, sph.ConvexPolygon]]:
+    """Generate mosaic of square tiles in the shape of LSST camera.
+
+    If ``ndiv`` is positive it calls `make_square_tiles` with both ``nx`` and
+    ``ny`` set to ``ndiv``. If ``ndiv`` is negative then it calls
+    ``make_camera_tiles`` with negated ``ndiv`` value.
+
+    Meaning of parameters and return value is the same as for above methods.
+    """
+    if ndiv < 0:
+        return make_camera_tiles(open_angle, -ndiv, direction=direction, rot_rad=rot_rad)
+    else:
+        return make_square_tiles(open_angle, ndiv, ndiv, direction=direction, rot_rad=rot_rad)
+
+
+def poly_area(polygon: sph.ConvexPolygon) -> float:
+    """Calculate area of a convex polygon.
+
+    Parameters
+    ----------
+    polygon : `lsst.sphgeom.ConvexPolygon`
+
+    Returns
+    -------
+    area : `float`
+    """
+
+    vertices = polygon.getVertices()
+    area = 0.
+    for i in range(2, len(vertices)):
+        area += triangle_area(vertices[0], vertices[i-1], vertices[i])
+    return area
+
+
+def triangle_area(v0: sph.UnitVector3d, v1: sph.UnitVector3d, v2: sph.UnitVector3d) -> float:
+    """Calculate triangle area.
+
+    Parameters
+    ----------
+    v0, v1, v2 : `lsst.sphgeom.UnitVector3d`
+
+    Returns
+    -------
+    area : `float`
+    """
+
+    # sides of a triangle
+    arccos = math.acos
+    a = arccos(v1.dot(v2))
+    b = arccos(v0.dot(v2))
+    c = arccos(v0.dot(v1))
+
+    # angles
+    sin, cos = math.sin, math.cos
+    alpha = arccos((cos(a)-cos(b)*cos(c))/(sin(b)*sin(c)))
+    beta = arccos((cos(b)-cos(a)*cos(c))/(sin(a)*sin(c)))
+    gamma = arccos((cos(c)-cos(a)*cos(b))/(sin(a)*sin(b)))
+
+    area = alpha + beta + gamma - math.pi
+    return area

@@ -26,11 +26,15 @@
 
 from argparse import ArgumentParser
 from collections import defaultdict
+from datetime import datetime, timezone
 import gzip
 import logging
 import re
 import sys
 import time
+
+
+_tz = None
 
 
 def _configLogger(verbosity):
@@ -48,11 +52,20 @@ class _Stat:
         self._cnt = cnt
         self._sum = sum
 
-    def value(self):
+    @property
+    def average(self):
         if self._cnt == 0:
             return None
         else:
-            return self._sum / self._cnt
+            return round(self._sum / self._cnt, 3)
+
+    @property
+    def sum(self):
+        return self._sum
+
+    @property
+    def count(self):
+        return self._cnt
 
     def add(self, v):
         self._cnt += 1
@@ -68,15 +81,18 @@ class _Stat:
         return self
 
     def __str__(self):
-        v = self.value()
+        v = self.average
         if v is None:
             return "NULL"
         else:
             return "{:.6g}".format(v)
 
 
-# dictionary with visit statistics
-_values = defaultdict(lambda: _Stat())
+# dictionary with context info
+_context = defaultdict(lambda: _Stat())
+_counters = defaultdict(lambda: _Stat())
+_timers_real = defaultdict(lambda: _Stat())
+_timers_cpu = defaultdict(lambda: _Stat())
 
 
 def _sort_lines(iterable, num=100):
@@ -99,14 +115,51 @@ def _sort_lines(iterable, num=100):
     yield from lines
 
 
+def _timestamp(line):
+    """Convert timestamp to nanoseconds.
+
+    Timestamp looks like "2020-02-10 18:40:00,148".
+    """
+    ts = ' '.join(line.split()[:2]).replace(',', '.')
+    dt = datetime.fromisoformat(ts)
+    dt = dt.replace(tzinfo=_tz)
+    return int(round(dt.timestamp() * 1e3))*1000000
+
+
+_re_tile1 = re.compile(r" tile=(\d+)x(\d+) ")
+_re_tile2 = re.compile(r" tile \((\d+), (\d+)\)")
+
+
+def _tile(line):
+    """Extract tile Id from a line"""
+    m = _re_tile1.search(line) or _re_tile2.search(line)
+    if m:
+        return "{}x{}".format(*m.group(1, 2))
+    return 'fov'
+
+
 def _new_visit(line):
+    """Initialize data structures for new visit.
     """
-    Initialize data structures for new visit.
-    """
-    _values.clear()
+    _context.clear()
+    _counters.clear()
+    _timers_real.clear()
+    _timers_cpu.clear()
     words = line.split()
     visit = int(words[-4])
-    _values['visit'] = visit
+    ts = _timestamp(line)
+    _context['visit'] = visit
+    # print(f"visit,tile='fov' start={visit} {ts}")
+    print(f"visit start={visit} {ts}")
+
+
+def _new_tile_visit(line):
+    pass
+    # words = line.split()
+    # visit = int(words[-7])
+    # ts = _timestamp(line)
+    # tile = _tile(line)
+    # print(f"visit,tile='{tile}' start={visit} {ts}")
 
 
 def _parse_counts(line):
@@ -116,17 +169,12 @@ def _parse_counts(line):
     words = line.split()
     count = int(words[-1])
     table_name = words[-4]
-    if table_name.endswith("DiaObject"):
-        _values['obj_count'] += count
-    elif table_name.endswith("DiaSource"):
-        _values['src_count'] += count
-    elif table_name.endswith("DiaForcedSource"):
-        _values['fsrc_count'] += count
+    ts = _timestamp(line)
+    print(f"count,table={table_name} value={count} {ts}")
 
 
-def _parse_timers(line):
-    """
-    Parse line with timer info.
+def _parse_timer(line):
+    """Parse timer info
     """
     p = line.rfind('\x1b')
     if p > 0:
@@ -134,130 +182,168 @@ def _parse_timers(line):
     words = line.replace('=', ' ').split()
     real = float(words[-5])
     cpu = float(words[-3]) + float(words[-1])
+    return real, cpu
+
+
+def _parse_timers(line):
+    """
+    Parse line with timer info.
+    """
+    real, cpu = _parse_timer(line)
+    timer = None
     if "DiaObject select: " in line:
-        _values['obj_select_real'] += real
-        _values['obj_select_cpu'] += cpu
+        timer = "obj_select"
     elif "DiaObject truncate: " in line:
-        _values['obj_trunc_real'] += real
-        _values['obj_trunc_cpu'] += cpu
+        timer = "obj_trunc"
     elif "DiaObjectLast delete: " in line:
-        _values['obj_last_delete_real'] += real
-        _values['obj_last_delete_cpu'] += cpu
+        timer = "obj_last_delete"
     elif "DiaObject insert: " in line or " DiaObjectNightly insert: " in line:
-        _values['obj_insert_real'] += real
-        _values['obj_insert_cpu'] += cpu
+        timer = "obj_insert"
     elif "DiaObjectLast insert: " in line:
-        _values['obj_last_insert_real'] += real
-        _values['obj_last_insert_cpu'] += cpu
+        timer = "obj_last_insert"
     elif "DiaObjectNightly copy: " in line:
-        _values['obj_daily_copy_real'] += real
-        _values['obj_daily_copy_cpu'] += cpu
+        timer = "obj_daily_copy"
     elif "DiaObjectNightly delete: " in line:
-        _values['obj_daily_delete_real'] += real
-        _values['obj_daily_delete_cpu'] += cpu
+        timer = "obj_daily_delete"
     elif "DiaSource select: " in line:
-        _values['src_select_real'] += real
-        _values['src_select_cpu'] += cpu
+        timer = "src_select"
     elif "DiaSource insert: " in line:
-        _values['src_insert_real'] += real
-        _values['src_insert_cpu'] += cpu
+        timer = "src_insert"
     elif "DiaForcedSource select: " in line:
-        _values['fsrc_select_real'] += real
-        _values['fsrc_select_cpu'] += cpu
+        timer = "fsrc_select"
     elif "DiaForcedSource insert: " in line:
-        _values['fsrc_insert_real'] += real
-        _values['fsrc_insert_cpu'] += cpu
+        timer = "fsrc_insert"
     elif " L1-store: " in line:
-        _values['store_real'] += real
-        _values['store_cpu'] += cpu
+        timer = "store"
     elif " VisitProcessing: " in line:
-        _values['visit_proc_real'] += real
-        _values['visit_proc_cpu'] += cpu
-    elif " Finished processing visit " in line and " tile " not in line:
-        _values['visit_real'] += real
-        _values['visit_cpu'] += cpu
+        timer = "visit_proc"
+    elif " Finished processing visit " in line and "tile" in line:
+        timer = "visit"
+
+    if timer:
+        # ts = _timestamp(line)
+        # tile = _tile(line)
+        # print(f"timer,tile='{tile}',timer={timer} real={real},cpu={cpu} {ts}")
+        _timers_real[timer] += real
+        _timers_cpu[timer] += cpu
 
 
 def _parse_select_count(line):
-    """
-    Parse line with counter of selected rows
-    """
+    """Parse line with counter of selected rows"""
     words = line.split()
+    key = None
     if "database found" in line:
         if "forced sources" in line:
-            _values['fsrc_selected'] += int(words[-3])
+            key = "fscr_selected"
+            value = int(words[-3])
         elif "sources" in line:
-            _values['src_selected'] += int(words[-2])
+            key = "src_selected"
+            value = int(words[-2])
         else:
-            _values['obj_selected'] += int(words[-2])
+            key = "obj_selected"
+            value = int(words[-2])
     elif "after filtering" in line:
-        _values['obj_in_fov'] += int(words[-2])
+        key = "obj_filtered"
+        value = int(words[-2])
+    if key:
+        # ts = _timestamp(line)
+        # tile = _tile(line)
+        # print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
+        _counters[key] += value
 
 
-# List of columns (keys in _values dictionary)
-_cols = ['visit',
-         'obj_select_real', 'obj_select_cpu',
-         'obj_last_delete_real', 'obj_last_insert_real',
-         'obj_trunc_real', 'obj_trunc_cpu',
-         'obj_insert_real', 'obj_insert_cpu',
-         'src_select_real', 'src_select_cpu',
-         'src_insert_real', 'src_insert_cpu',
-         'fsrc_select_real', 'fsrc_select_cpu',
-         'fsrc_insert_real', 'fsrc_insert_cpu',
-         'select_real',
-         'store_real', 'store_cpu',
-         'visit_proc_real', 'visit_proc_cpu',
-         'visit_real', 'visit_cpu',
-         'obj_selected', 'src_selected', 'fsrc_selected',
-         'obj_in_fov',
-         'obj_count', 'src_count', 'fsrc_count']
-
-
-def _value(key):
-    """Return value for given key, special handling for some
-    computed values.
-    """
-    if key == "select_real":
-        sumkeys = ("obj_select_real", "src_select_real", "fsrc_select_real")
-        values = [_values[sk].value() for sk in sumkeys]
-        values = [value for value in values if value is not None]
-        if values:
-            return _Stat(1, sum(values))
+def _parse_queries_count(line):
+    """Parse line with counter of select queries"""
+    words = line.split()
+    key = None
+    if "getDiaObjects" in line:
+        key = "obj"
+        value = int(words[-1])
+    elif "_getSources DiaSource" in line:
+        key = "src"
+        value = int(words[-1])
+    elif "_getSources DiaForcedSource" in line:
+        key = "fsrc"
+        value = int(words[-1])
+    if key:
+        if "#queries:" in line:
+            key += "_queries"
+        elif "#partitions:" in line:
+            key += "_partitions"
         else:
-            return _Stat()
-    return _values[key]
+            return
+        # ts = _timestamp(line)
+        # tile = _tile(line)
+        # print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
+        _counters[key] += value
 
 
-# Flag to print CSV header line once
-_header = True
+def _parse_store_count(line):
+    """Parse line with counter of stored rows"""
+    words = line.split()
+    key = None
+    if words[-1] == "ForcedSources":
+        key = "fscr_stored"
+        value = int(words[-2])
+    elif words[-1] == "Sources":
+        key = "src_stored"
+        value = int(words[-2])
+    elif words[-1] == "Objects":
+        key = "obj_stored"
+        value = int(words[-2])
+    if key:
+        # ts = _timestamp(line)
+        # tile = _tile(line)
+        # print(f"counter,tile='{tile}',counter={key} value={value} {ts}")
+        _counters[key] += value
+
+
+def _end_tile_visit(line):
+    """
+    Dump collected information
+    """
+    # visit = _context['visit']
+    # ts = _timestamp(line)
+    # real, cpu = _parse_timer(line)
+    # tile = _tile(line)
+    # print(f"visit,tile='{tile}' end={visit},real={real},cpu={cpu} {ts}")
 
 
 def _end_visit(line):
     """
     Dump collected information
     """
-    global _header
-    if _header:
-        print(','.join(_cols))
-        _header = False
-    print(','.join(str(_value(c)) for c in _cols))
+    ts = _timestamp(line)
+    visit = _context['visit']
+    _context['visit'] = None
+    real, cpu = _parse_timer(line)
+    # print(f"visit,tile='fov' end={visit},real={real},cpu={cpu} {ts}")
+    print(f"visit end={visit},real={real},cpu={cpu} {ts}")
+    for key, stat in _counters.items():
+        # print(f"counter,tile='fov',counter={key} sum={stat.sum},avg={stat.average} {ts}")
+        print(f"counter,counter={key} sum={stat.sum},avg={stat.average} {ts}")
+    for key, stat in _timers_real.items():
+        # print(f"timer,tile='fov',timer={key} sum={stat.sum},avg={stat.average} {ts}")
+        print(f"timing,timer={key},kind=real sum={stat.sum},avg={stat.average} {ts}")
+    for key, stat in _timers_cpu.items():
+        # print(f"timer,tile='fov',timer={key} sum={stat.sum},avg={stat.average} {ts}")
+        print(f"timing,timer={key},kind=cpu sum={stat.sum},avg={stat.average} {ts}")
     sys.stdout.flush()
 
 
 # Map line sibstring to method
 _dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
+             (re.compile(r"Start processing visit \d+ tile"), _new_tile_visit),
              (re.compile(" row count: "), _parse_counts),
              (re.compile(": real="), _parse_timers),
+             (re.compile(": #partitions: "), _parse_queries_count),
+             (re.compile(": #queries: "), _parse_queries_count),
              (re.compile(" database found "), _parse_select_count),
              (re.compile(" after filtering "), _parse_select_count),
+             (re.compile(" will store "), _parse_store_count),
+             (re.compile(r"Finished processing visit \d+ tile"), _end_tile_visit),  # must be last
              (re.compile(r"Finished processing visit \d+, (?!tile)"), _end_visit),  # must be last
              ]
-
-
-_daily_dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
-                   (re.compile(": real="), _parse_timers),
-                   (re.compile("Done with daily activities"), _end_visit),  # must be last
-                   ]
 
 
 def _follow(input, stop_timeout_sec=60):
@@ -307,10 +393,9 @@ def main():
     parser = ArgumentParser(description=descr)
     parser.add_argument('-v', '--verbose', action='count', default=0,
                         help='More verbose output, can use several times.')
-    parser.add_argument('-s', '--short', action='store_true', default=False,
-                        help='Save fewer columns into CSV file.')
-    parser.add_argument('-d', '--daily', action='store_true', default=False,
-                        help='Extract numbers from daily activities.')
+    parser.add_argument("-D", "--database", default="ap_proto", help="Name of the InfluxDB database.")
+    parser.add_argument("-u", "--utc", default=False, action="store_true",
+                        help="Use UTC for timestamps in the log file.")
     parser.add_argument("-F", "--follow", default=False, action="store_true",
                         help="Continue reading as file grows.")
     parser.add_argument("--follow-timeout", default=60, type=int, metavar="SECONDS",
@@ -322,19 +407,14 @@ def main():
     # configure logging
     _configLogger(args.verbose)
 
+    if args.utc:
+        global _tz
+        _tz = timezone.utc
+
     dispatch = _dispatch
 
-    if args.short:
-        global _cols
-        _cols = ['visit', 'visit_real', 'visit_cpu',
-                 'visit_proc_real', 'visit_proc_cpu',
-                 'obj_count', 'src_count', 'fsrc_count']
-
-    if args.daily:
-        dispatch = _daily_dispatch
-        _cols = ['visit',
-                 'obj_daily_copy_real',
-                 'obj_daily_delete_real']
+    print("# DML")
+    print("# CONTEXT-DATABASE: {}".format(args.database))
 
     # open each file in order
     for input in args.file:

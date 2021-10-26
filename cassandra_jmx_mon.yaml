@@ -1,0 +1,34 @@
+
+metrics:
+  - object: org.apache.cassandra.metrics:type=BufferPool,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=CQL,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=Cache,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=Client,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=ClientRequest,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=CommitLog,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=Compaction,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=Keyspace,keyspace=apdb,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=MemtablePool,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=Table,keyspace=apdb,scope=Dia*,*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=Table,name=*
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=ThreadPools,*
+    attributes: .*
+  - object: org.apache.cassandra.db:type=StorageProxy
+    attributes: .*
+  - object: org.apache.cassandra.metrics:type=ReadRepair,*
+    attributes: .*
+  - object: java.lang:type=GarbageCollector,*
+    attributes: CollectionCount|CollectionTime
+  - object: java.lang:type=OperatingSystem
+    attributes: .*

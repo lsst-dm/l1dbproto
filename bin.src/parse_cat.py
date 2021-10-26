@@ -41,7 +41,7 @@ STATE_TABLE = 1
 STATE_TABLE_SKIP = 2
 STATE_DESCR = 3
 
-# Tables that we need for PPDB
+# Tables that we need for APDB
 TABLES = ['DiaObject', 'SSObject', 'DiaSource', 'DiaForcedSource', 'DiaObject_To_Object_Match']
 
 

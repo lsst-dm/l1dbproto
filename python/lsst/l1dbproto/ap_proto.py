@@ -39,12 +39,13 @@ from typing import Any, cast, Iterator, List, Optional, Tuple
 
 from mpi4py import MPI
 import numpy
+import numpy.random
 from lsst.daf.base import DateTime
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
-from .visit_info import VisitInfoStore
-from lsst.dax.apdb import Apdb, ApdbSql, timer
+from lsst.dax.apdb import Apdb, ApdbSql, ApdbSqlConfig, ApdbCassandra, ApdbCassandraConfig, timer, ApdbTables
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
+from .visit_info import VisitInfoStore
 
 
 COLOR_RED = '\033[1;31m'
@@ -90,10 +91,12 @@ def _visitTimes(start_time: DateTime, interval_sec: int, count: int) -> Iterator
             count -= 1
         nsec += delta
 
-# def _utc_seconds(dt):
-#     """Convert datetime to POSIX seconds
-#     """
-#     return int((dt - datetime.utcfromtimestamp(0)).total_seconds())
+
+def _nrows(table: Optional[pandas.DataFrame]) -> int:
+    if table is None:
+        return 0
+    else:
+        return len(table)
 
 
 # special code to makr sources ouside reagion
@@ -116,12 +119,16 @@ class APProto(object):
         parser = ArgumentParser(description=descr)
         parser.add_argument('-v', '--verbose', dest='verbose', action='count', default=0,
                             help='More verbose output, can use several times.')
+        parser.add_argument('--backend', default="sql", choices=["sql", "cassandra"],
+                            help='Backend type, def: %(default)s')
         parser.add_argument('-n', '--num-visits', type=int, default=1, metavar='NUMBER',
                             help='Number of visits to process, def: 1')
         parser.add_argument('-f', '--visits-file', default="ap_proto_visits.dat", metavar='PATH',
                             help='File to keep visit information, def: %(default)s')
         parser.add_argument('-c', '--config', default=None, metavar='PATH',
-                            help='Name of the database config file (pex.config)')
+                            help='Name of the database config file (pex.config format)')
+        parser.add_argument('-a', '--app-config', default=None, metavar='PATH',
+                            help='Name of the ap_proto config file (pex.config format)')
         parser.add_argument('-d', '--dump-config', default=False, action="store_true",
                             help='Dump configuration to standard output and quit.')
         parser.add_argument('-U', '--no-update', default=False, action='store_true',
@@ -139,18 +146,39 @@ class APProto(object):
         """Run whole shebang.
         """
 
-        if self.args.config:
-            self.config.load(self.args.config)
+        # load configurations
+        if self.args.app_config:
+            self.config.load(self.args.app_config)
+
+        if self.args.backend == "sql":
+            self.dbconfig = ApdbSqlConfig()
+            if self.args.config:
+                self.dbconfig.load(self.args.config)
+        elif self.args.backend == "cassandra":
+            self.dbconfig = ApdbCassandraConfig()
+            if self.args.config:
+                self.dbconfig.load(self.args.config)
 
         if self.args.dump_config:
             self.config.saveToStream(sys.stdout)
+            self.dbconfig.saveToStream(sys.stdout)
             return 0
 
         # instantiate db interface
-        db = ApdbSql(self.config)
+        db: Apdb
+        if self.args.backend == "sql":
+            db = ApdbSql(config=self.dbconfig)
+        elif self.args.backend == "cassandra":
+            db = ApdbCassandra(config=self.dbconfig)
+
         visitInfoStore = VisitInfoStore(self.args.visits_file)
 
-        if self.config.divide > 1:
+        num_tiles = 1
+        if self.config.divide != 1:
+
+            tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide)
+            num_tiles = len(tiles)
+
             # check that we have reasonable MPI setup
             if self.config.mp_mode == "mpi":
                 comm = MPI.COMM_WORLD
@@ -159,7 +187,6 @@ class APProto(object):
                 node = MPI.Get_processor_name()
                 _LOG.info(COLOR_YELLOW + "MPI job rank=%d size=%d, node %s" + COLOR_RESET,
                           rank, num_proc, node)
-                num_tiles = self.config.divide**2
                 if num_proc != num_tiles:
                     raise ValueError(f"Number of MPI processes ({num_proc}) "
                                      f"does not match number of tiles ({num_tiles})")
@@ -179,7 +206,11 @@ class APProto(object):
             start_time = self.config.start_time_dt
 
         if self.config.divide > 1:
-            _LOG.info("Will divide FOV into %dx%d regions", self.config.divide, self.config.divide)
+            _LOG.info("Will divide FOV into %d regions", num_tiles)
+
+        src_read_period = self.config.src_read_period
+        src_read_visits = round(self.config.src_read_period * self.config.src_read_duty_cycle)
+        _LOG.info("Will read sources for %d visits out of %d", src_read_visits, src_read_period)
 
         # read sources file
         _LOG.info("Start loading variable sources from %r", self.config.sources_file)
@@ -240,9 +271,10 @@ class APProto(object):
             # so only do it once in a while
             modu = 200 if visit_id <= 10000 else 1000
             if visit_id % modu == 0:
-                counts = db.tableRowCount()
-                for tbl, count in sorted(counts.items()):
-                    _LOG.info('%s row count: %s', tbl, count)
+                if hasattr(db, "tableRowCount"):
+                    counts = db.tableRowCount()  # type: ignore
+                    for tbl, count in sorted(counts.items()):
+                        _LOG.info('%s row count: %s', tbl, count)
 
             # numpy seems to do some multi-threaded stuff which "leaks" CPU cycles to the code below
             # and it gets counted as resource usage in timers, add a short delay here so that threads
@@ -259,8 +291,7 @@ class APProto(object):
 
                 if self.config.mp_mode == "fork":
 
-                    tiles = geom.make_square_tiles(
-                        self.config.FOV_rad, self.config.divide, self.config.divide, pointing_v)
+                    tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
 
                     with timer.Timer("VisitProcessing"):
                         # spawn subprocesses to handle individual tiles
@@ -296,8 +327,7 @@ class APProto(object):
 
                 elif self.config.mp_mode == "mpi":
 
-                    tiles = geom.make_square_tiles(
-                        self.config.FOV_rad, self.config.divide, self.config.divide, pointing_v, False)
+                    tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
                     _LOG.info("Split FOV into %d tiles for MPI", len(tiles))
 
                     # spawn subprocesses to handle individual tiles, special
@@ -324,7 +354,7 @@ class APProto(object):
                       COLOR_RESET, visit_id, loop_timer)
 
         # stop MPI slaves
-        if self.config.divide > 1 and self.config.mp_mode == "mpi":
+        if num_tiles > 1 and self.config.mp_mode == "mpi":
             _LOG.info("Stopping MPI tile processes")
             tile_data_stop = [None] * self.config.divide**2
             self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data_stop)
@@ -392,7 +422,10 @@ class APProto(object):
 
         Parameters
         ----------
+        db : `Apdb`
+            APDB interface
         visit_id : `int`
+            Visit ID.
         dt : `DateTime`
             Time of visit
         region : `sphgeom.Region`
@@ -411,6 +444,10 @@ class APProto(object):
         if tile is not None:
             name = "tile={}x{} ".format(*tile)
 
+        src_read_period = self.config.src_read_period
+        src_read_visits = round(self.config.src_read_period * self.config.src_read_duty_cycle)
+        do_read_src = visit_id % src_read_period < src_read_visits
+
         # make a mask
         for i in range(len(sources)):
             xyz = sources[i]
@@ -422,11 +459,11 @@ class APProto(object):
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
             latest_objects = db.getDiaObjects(region)
-            _LOG.info(name+'database found %s objects', len(latest_objects))
+            _LOG.info(name+'database found %s objects', _nrows(latest_objects))
 
-            # filter database obects to a mask
+            # filter database objects to a mask
             latest_objects = self._filterDiaObjects(latest_objects, region)
-            _LOG.info(name+'after filtering %s objects', len(latest_objects))
+            _LOG.info(name+'after filtering %s objects', _nrows(latest_objects))
 
         with timer.Timer(name+"S2O-matching"):
 
@@ -437,16 +474,25 @@ class APProto(object):
             srcs = self._makeDiaSources(sources, indices, dt, visit_id)
 
             # do forced photometry (can extends objects)
-            fsrcs = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
+            fsrcs, objects = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
 
-        with timer.Timer(name+"Source-read"):
+            if self.config.fill_empty_fields:
+                self._fillRandomData(objects, ApdbTables.DiaObject, db)
+                self._fillRandomData(srcs, ApdbTables.DiaSource, db)
+                self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
 
-            latest_objects_ids = list(latest_objects['diaObjectId'])
-            read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
-            _LOG.info(name+'database found %s sources', 0 if read_srcs is None else len(read_srcs))
+        if do_read_src:
+            with timer.Timer(name+"Source-read"):
 
-            read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt)
-            _LOG.info(name+'database found %s forced sources', 0 if read_srcs is None else len(read_srcs))
+                latest_objects_ids = list(latest_objects['diaObjectId'])
+
+                read_srcs = db.getDiaSources(region, latest_objects_ids, dt)
+                _LOG.info(name+'database found %s sources', _nrows(read_srcs))
+
+                read_srcs = db.getDiaForcedSources(region, latest_objects_ids, dt)
+                _LOG.info(name+'database found %s forced sources', _nrows(read_srcs))
+        else:
+            _LOG.info("skipping reading of sources for this visit")
 
         if not self.args.no_update:
 
@@ -524,12 +570,12 @@ class APProto(object):
 
         n_trans = sum(catalog["diaObjectId"] >= _TRANSIENT_START_ID)
 
-        _LOG.info('found %s matching objects and %s transients/noise', len(catalog) - n_trans, n_trans)
+        _LOG.info('found %s matching objects and %s transients/noise', _nrows(catalog) - n_trans, n_trans)
 
         return catalog
 
     def _forcedPhotometry(self, objects: pandas.DataFrame, latest_objects: pandas.DataFrame,
-                          dt: DateTime, visit_id: int) -> pandas.DataFrame:
+                          dt: DateTime, visit_id: int) -> Tuple[pandas.DataFrame, pandas.DataFrame]:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
@@ -549,7 +595,7 @@ class APProto(object):
         midPointTai = dt.get(system=DateTime.MJD)
 
         if objects.empty:
-            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midPointTai", "flags"])
+            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midPointTai", "flags"]), objects
 
         # Ids of the detected objects
         ids = set(objects['diaObjectId'])
@@ -579,9 +625,18 @@ class APProto(object):
                 "flags": 0,
             })
 
+            # extend forced sources
             catalog = pandas.concat([df1, df2])
 
-        return catalog
+            # also extend objects
+            o2 = pandas.DataFrame({
+                "diaObjectId": o1["diaObjectId"],
+                "ra": o1["ra"],
+                "decl": o1["decl"],
+            })
+            objects = objects.append(o2)
+
+        return catalog, objects
 
     def _makeDiaSources(self, sources: numpy.ndarray, indices: numpy.ndarray,
                         dt: DateTime, visit_id: int) -> pandas.DataFrame:
@@ -632,3 +687,49 @@ class APProto(object):
         self.lastSourceId += nrows
 
         return catalog
+
+    def _fillRandomData(self, catalog: pandas.DataFrame, table: ApdbTables, db: Apdb) -> None:
+        """Add missing fields to a catalog and fill it with random numbers.
+
+        Parameters
+        ----------
+        catalog : `pandas.DataFrame`
+            Catalog to extend and fill.
+        table : `ApdbTables`
+            Table type.
+        db : `Apdb`
+            APDB interface
+        """
+        rng = numpy.random.default_rng()
+        table_def = db.tableDef(table)
+        if table_def is None:
+            return
+        count = len(catalog)
+        for colDef in table_def.columns:
+            if table is ApdbTables.DiaObject and colDef.name in ("validityStart", "validityEnd"):
+                continue
+            if colDef.name == "pixelId":
+                continue
+            if colDef.name not in catalog.columns:
+                # need to make a new column
+                if colDef.type == "FLOAT":
+                    data = rng.random(count, dtype=numpy.float32)
+                elif colDef.type == "DOUBLE":
+                    data = rng.random(count, dtype=numpy.float64)
+                elif colDef.type == "INT":
+                    data = rng.integers(0, 1000, count, dtype=numpy.int32)
+                elif colDef.type == "BIGINT":
+                    data = rng.integers(0, 1000, count, dtype=numpy.int64)
+                elif colDef.type == "SMALLINT":
+                    data = rng.integers(0, 1000, count, dtype=numpy.int16)
+                elif "INT" in colDef.type:
+                    data = rng.integers(0, 100, count)
+                elif colDef.type == "BLOB":
+                    # random bytes
+                    data = pandas.Series([rng.bytes(100) for i in range(count)])
+                elif colDef.type == "DATETIME":
+                    data = rng.integers(1500000000, 1600000000, count, dtype=numpy.int64)
+                    data = numpy.array(data, dtype="datetime64[s]")
+                else:
+                    data = rng.random(count)
+                catalog[colDef.name] = data
