@@ -21,10 +21,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Script to simulate different partitionings of PPDB.
+"""Script to simulate different partitionings of APDB.
 
-It an generate different spatial partitionings based on input parameters
-and runs a MC simulation of amny pointings to estimate how CCDs map to
+It can generate different spatial partitionings based on input parameters
+and runs a MC simulation of many pointings to estimate how CCDs map to
 partitions.
 """
 
