@@ -66,7 +66,7 @@
 #-Dcassandra.triggers_dir=directory
 
 # For testing new compaction and compression strategies. It allows you to experiment with different
-# strategies and benchmark write performance differences without affecting the production workload. 
+# strategies and benchmark write performance differences without affecting the production workload.
 #-Dcassandra.write_survey=true
 
 # To disable configuration via JMX of auth caches (such as those for credentials, permissions and
@@ -157,8 +157,8 @@
 # the same value to avoid stop-the-world GC pauses during resize, and
 # so that we can lock the heap in memory on startup to prevent any
 # of it from being swapped out.
-#-Xms4G
-#-Xmx4G
+-Xms64G
+-Xmx64G
 
 # Young generation size is automatically calculated by cassandra-env
 # based on this formula: min(100 * num_cores, 1/4 * heap size)
