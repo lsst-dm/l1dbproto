@@ -303,5 +303,10 @@ if [ "x$MX4J_PORT" != "x" ]; then
     fi
 fi
 
+# Add jolokia agent if present
+if [ -f "$CASSANDRA_HOME/lib/jolokia-jvm.jar" ] ; then
+    JVM_OPTS="$JVM_OPTS -javaagent:$CASSANDRA_HOME/lib/jolokia-jvm.jar=port=8778,host=localhost"
+fi
+
 JVM_OPTS="$JVM_OPTS $JVM_EXTRA_OPTS"
 
