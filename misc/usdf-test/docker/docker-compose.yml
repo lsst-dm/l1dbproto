@@ -1,5 +1,3 @@
-version: "2"
-
 services:
 
   cassandra:
@@ -38,6 +36,3 @@ services:
     # run as regular user to avoid ownership changes by entrypoint, but
     # files need to be owned by uid 999 already
     user: cassandra
-
-    # entrypoint: bash
-    # tty: true
