@@ -1,0 +1,38 @@
+services:
+
+  cassandra:
+
+    image: fermented/cassandra-jolokia:latest
+    build: ./cassandra-jolokia
+
+    network_mode: "host"
+    restart: "unless-stopped"
+
+    volumes:
+      - type: bind
+        source: /data
+        target: /data
+      - type: bind
+        # entrypoint updates cassandra.yaml so it cannot be read-only
+        source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/cassandra.yaml
+        target: /etc/cassandra/cassandra.yaml
+      - type: bind
+        source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/jvm-server.options
+        target: /etc/cassandra/jvm-server.options
+        read_only: true
+      - type: bind
+        source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/jvm11-server.options
+        target: /etc/cassandra/jvm11-server.options
+        read_only: true
+      - type: bind
+        source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/cassandra-env.sh
+        target: /etc/cassandra/cassandra-env.sh
+        read_only: true
+
+    environment:
+      CASSANDRA_SEEDS: "sdfk8sc032.sdf.slac.stanford.edu,sdfk8sc048.sdf.slac.stanford.edu"
+      CASSANDRA_CLUSTER_NAME: '"APDB USDF test"'
+
+    # run as regular user to avoid ownership changes by entrypoint, but
+    # files need to be owned by uid 999 already
+    user: cassandra
