@@ -135,7 +135,7 @@ batchlog_replay_throttle: 1024KiB
 #   users. It keeps usernames and hashed passwords in system_auth.roles table.
 #   Please increase system_auth keyspace replication factor if you use this authenticator.
 #   If using PasswordAuthenticator, CassandraRoleManager must also be used (see below)
-authenticator: AllowAllAuthenticator
+authenticator: PasswordAuthenticator
 
 # Authorization backend, implementing IAuthorizer; used to limit access/provide permissions
 # Out of the box, Cassandra provides org.apache.cassandra.auth.{AllowAllAuthorizer,
@@ -144,7 +144,7 @@ authenticator: AllowAllAuthenticator
 # - AllowAllAuthorizer allows any action to any user - set it to disable authorization.
 # - CassandraAuthorizer stores permissions in system_auth.role_permissions table. Please
 #   increase system_auth keyspace replication factor if you use this authorizer.
-authorizer: AllowAllAuthorizer
+authorizer: CassandraAuthorizer
 
 # Part of the Authentication & Authorization backend, implementing IRoleManager; used
 # to maintain grants and memberships between roles.
@@ -486,14 +486,14 @@ saved_caches_directory: /data/disk3/test-apdb-cluster/saved_caches
 # mode will wait up to commitlog_sync_group_window between flushes.
 #
 # Min unit: ms
-# commitlog_sync_group_window: 1000ms
+commitlog_sync_group_window: 100ms
 #
 # the default option is "periodic" where writes may be acked immediately
 # and the CommitLog is simply synced every commitlog_sync_period
 # milliseconds.
-commitlog_sync: periodic
+commitlog_sync: group
 # Min unit: ms
-commitlog_sync_period: 10000ms
+# commitlog_sync_period: 10000ms
 
 # When in periodic commitlog mode, the number of milliseconds to block writes
 # while waiting for a slow disk flush to complete.
