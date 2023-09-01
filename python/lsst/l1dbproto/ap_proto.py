@@ -612,10 +612,10 @@ class APProto(object):
             Visit ID.
         """
 
-        midPointTai = dt.get(system=DateTime.MJD)
+        midpointMjdTai = dt.get(system=DateTime.MJD)
 
         if objects.empty:
-            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midPointTai", "flags"]), objects
+            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midpointMjdTai", "flags"]), objects
 
         # Ids of the detected objects
         ids = set(objects['diaObjectId'])
@@ -624,7 +624,7 @@ class APProto(object):
         df1 = pandas.DataFrame({
             "diaObjectId": objects["diaObjectId"],
             "ccdVisitId": visit_id,
-            "midpointMjdTai": midPointTai,
+            "midpointMjdTai": midpointMjdTai,
             "flags": 0,
         })
 
@@ -641,7 +641,7 @@ class APProto(object):
             df2 = pandas.DataFrame({
                 "diaObjectId": o1["diaObjectId"],
                 "ccdVisitId": visit_id,
-                "midPointTai": midPointTai,
+                "midpointMjdTai": midpointMjdTai,
                 "flags": 0,
             })
 
@@ -686,7 +686,7 @@ class APProto(object):
             return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
                                  index=["ra", "dec"])
 
-        midPointTai = dt.get(system=DateTime.MJD)
+        midpointMjdTai = dt.get(system=DateTime.MJD)
 
         catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
         catalog["diaObjectId"] = indices
@@ -702,7 +702,7 @@ class APProto(object):
         catalog["parentDiaSourceId"] = 0
         catalog["psFlux"] = 1.
         catalog["psFluxErr"] = 0.01
-        catalog["midpointMjdTai"] = midPointTai
+        catalog["midpointMjdTai"] = midpointMjdTai
         catalog["flags"] = 0
 
         nrows = catalog.shape[0]
