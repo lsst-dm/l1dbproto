@@ -33,6 +33,13 @@ services:
       CASSANDRA_SEEDS: "sdfk8sc032.sdf.slac.stanford.edu,sdfk8sc048.sdf.slac.stanford.edu"
       CASSANDRA_CLUSTER_NAME: '"APDB USDF test"'
 
+    # Casandra logs a lot
+    logging:
+      driver: json-file
+      options:
+        max-size: "1g"
+        max-file: 10
+
     # run as regular user to avoid ownership changes by entrypoint, but
     # files need to be owned by uid 999 already
     user: cassandra
