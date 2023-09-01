@@ -486,12 +486,12 @@ saved_caches_directory: /data/disk3/test-apdb-cluster/saved_caches
 # mode will wait up to commitlog_sync_group_window between flushes.
 #
 # Min unit: ms
-commitlog_sync_group_window: 100ms
+# commitlog_sync_group_window: 100ms
 #
 # the default option is "periodic" where writes may be acked immediately
 # and the CommitLog is simply synced every commitlog_sync_period
 # milliseconds.
-commitlog_sync: group
+commitlog_sync: batch
 # Min unit: ms
 # commitlog_sync_period: 10000ms
 
