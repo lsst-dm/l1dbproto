@@ -33,11 +33,13 @@ from datetime import timedelta
 import logging
 import os
 import pandas
+import string
 import sys
 import time
 from typing import Any, cast, Iterator, List, Optional, Tuple
 
 from mpi4py import MPI
+import felis
 import numpy
 import numpy.random
 from lsst.daf.base import DateTime
@@ -64,11 +66,23 @@ def _configLogger(verbosity: int) -> None:
     """
     Configure logging based on verbosity level.
     """
+    if MPI.COMM_WORLD.Get_size() > 1:
+        rank = MPI.COMM_WORLD.Get_rank()
+        old_factory = logging.getLogRecordFactory()
+
+        def record_factory(*args, **kwargs):
+            record = old_factory(*args, **kwargs)
+            record.mpi_rank = rank
+            return record
+
+        logging.setLogRecordFactory(record_factory)
+        logfmt = "%(asctime)s [%(levelname)s] [rank=%(mpi_rank)03d] %(name)s: %(message)s"
+    else:
+        logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
-    logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
+    # logging.getLogger("cassandra").setLevel(logging.INFO)
 
 
 def _isDayTime(dt: DateTime) -> bool:
@@ -248,12 +262,12 @@ class APProto(object):
                 pointing_xyz = generators.rand_sphere_xyz(1, -1)[0]
                 pointing_v = UnitVector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
                 ra = LonLat.longitudeOf(pointing_v).asDegrees()
-                decl = LonLat.latitudeOf(pointing_v).asDegrees()
+                dec = LonLat.latitudeOf(pointing_v).asDegrees()
 
                 # sphgeom.Circle opening angle is actually a half of opening angle
                 region = Circle(pointing_v, Angle(self.config.FOV_rad/2))
 
-                _LOG.info("Pointing ra, decl = %s, %s; xyz = %s", ra, decl, pointing_xyz)
+                _LOG.info("Pointing ra, dec = %s, %s; xyz = %s", ra, dec, pointing_xyz)
 
                 # Simulating difference image analysis
                 dia = DIA.DIA(pointing_xyz, self.config.FOV_rad, var_sources,
@@ -356,7 +370,7 @@ class APProto(object):
         # stop MPI slaves
         if num_tiles > 1 and self.config.mp_mode == "mpi":
             _LOG.info("Stopping MPI tile processes")
-            tile_data_stop = [None] * self.config.divide**2
+            tile_data_stop = [None] * num_tiles
             self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data_stop)
 
         return 0
@@ -388,14 +402,17 @@ class APProto(object):
         `tile_data` contains all `None` then None is returned to all
         processes.
         """
-        _LOG.debug("MPI rank %d scatter with %r", comm.Get_rank(), tile_data)
+        _LOG.debug(
+            "MPI rank %d scatter with %r", comm.Get_rank(), None if tile_data is None else len(tile_data)
+        )
         tile_data = comm.scatter(tile_data, root=0)
-        _LOG.debug("MPI rank %d scatter returned %r", comm.Get_rank(), tile_data)
         if tile_data is None:
             # this signals stop running
+            _LOG.debug("MPI rank %d scatter returned None", comm.Get_rank())
             return None
         else:
             visit_id, dt, region, sources, indices, tile, lastSourceId = tile_data
+            _LOG.debug("MPI rank %d scatter returned visit=%r tile=%r", comm.Get_rank(), visit_id, tile)
             self.lastSourceId = lastSourceId
             _LOG.info(COLOR_MAGENTA + "+++ Start processing visit %s tile %s at %s" + COLOR_RESET,
                       visit_id, tile, dt)
@@ -477,9 +494,9 @@ class APProto(object):
             fsrcs, objects = self._forcedPhotometry(objects, latest_objects, dt, visit_id)
 
             if self.config.fill_empty_fields:
-                self._fillRandomData(objects, ApdbTables.DiaObject, db)
-                self._fillRandomData(srcs, ApdbTables.DiaSource, db)
-                self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
+                objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
+                srcs = self._fillRandomData(srcs, ApdbTables.DiaSource, db)
+                fsrcs = self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
 
         if do_read_src:
             with timer.Timer(name+"Source-read"):
@@ -523,7 +540,7 @@ class APProto(object):
             return latest_objects
 
         def in_region(obj: Any) -> bool:
-            lonLat = LonLat.fromDegrees(obj['ra'], obj['decl'])
+            lonLat = LonLat.fromDegrees(obj['ra'], obj['dec'])
             dir_obj = UnitVector3d(lonLat)
             return region.contains(dir_obj)
 
@@ -558,11 +575,14 @@ class APProto(object):
             v3d = Vector3d(row.x, row.y, row.z)
             sp = SpherePoint(v3d)
             return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
-                                 index=["ra", "decl"])
+                                 index=["ra", "dec"])
 
         catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
         catalog["diaObjectId"] = indices
         catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
+
+        if len(catalog) == 0:
+            return pandas.DataFrame(columns=[ "ra", "dec", "diaObjectId"])
 
         cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
@@ -592,10 +612,10 @@ class APProto(object):
             Visit ID.
         """
 
-        midPointTai = dt.get(system=DateTime.MJD)
+        midpointMjdTai = dt.get(system=DateTime.MJD)
 
         if objects.empty:
-            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midPointTai", "flags"]), objects
+            return pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midpointMjdTai", "flags"]), objects
 
         # Ids of the detected objects
         ids = set(objects['diaObjectId'])
@@ -604,7 +624,7 @@ class APProto(object):
         df1 = pandas.DataFrame({
             "diaObjectId": objects["diaObjectId"],
             "ccdVisitId": visit_id,
-            "midPointTai": midPointTai,
+            "midpointMjdTai": midpointMjdTai,
             "flags": 0,
         })
 
@@ -621,7 +641,7 @@ class APProto(object):
             df2 = pandas.DataFrame({
                 "diaObjectId": o1["diaObjectId"],
                 "ccdVisitId": visit_id,
-                "midPointTai": midPointTai,
+                "midpointMjdTai": midpointMjdTai,
                 "flags": 0,
             })
 
@@ -632,9 +652,9 @@ class APProto(object):
             o2 = pandas.DataFrame({
                 "diaObjectId": o1["diaObjectId"],
                 "ra": o1["ra"],
-                "decl": o1["decl"],
+                "dec": o1["dec"],
             })
-            objects = objects.append(o2)
+            objects = pandas.concat([objects, o2])
 
         return catalog, objects
 
@@ -664,22 +684,25 @@ class APProto(object):
             v3d = Vector3d(row.x, row.y, row.z)
             sp = SpherePoint(v3d)
             return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()],
-                                 index=["ra", "decl"])
+                                 index=["ra", "dec"])
 
-        midPointTai = dt.get(system=DateTime.MJD)
+        midpointMjdTai = dt.get(system=DateTime.MJD)
 
         catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
         catalog["diaObjectId"] = indices
         catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
 
-        cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
+        if len(catalog) == 0:
+            cat_polar = pandas.DataFrame([], columns=["ra", "dec", "diaObjectId"])
+        else:
+            cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
         catalog = cat_polar
         catalog["ccdVisitId"] = visit_id
         catalog["parentDiaSourceId"] = 0
         catalog["psFlux"] = 1.
         catalog["psFluxErr"] = 0.01
-        catalog["midPointTai"] = midPointTai
+        catalog["midpointMjdTai"] = midpointMjdTai
         catalog["flags"] = 0
 
         nrows = catalog.shape[0]
@@ -688,7 +711,7 @@ class APProto(object):
 
         return catalog
 
-    def _fillRandomData(self, catalog: pandas.DataFrame, table: ApdbTables, db: Apdb) -> None:
+    def _fillRandomData(self, catalog: pandas.DataFrame, table: ApdbTables, db: Apdb) -> pandas.DataFrame:
         """Add missing fields to a catalog and fill it with random numbers.
 
         Parameters
@@ -703,8 +726,9 @@ class APProto(object):
         rng = numpy.random.default_rng()
         table_def = db.tableDef(table)
         if table_def is None:
-            return
+            return catalog
         count = len(catalog)
+        columns = []
         for colDef in table_def.columns:
             if table is ApdbTables.DiaObject and colDef.name in ("validityStart", "validityEnd"):
                 continue
@@ -712,24 +736,36 @@ class APProto(object):
                 continue
             if colDef.name not in catalog.columns:
                 # need to make a new column
-                if colDef.type == "FLOAT":
+                if colDef.datatype is felis.types.Float:
                     data = rng.random(count, dtype=numpy.float32)
-                elif colDef.type == "DOUBLE":
+                elif colDef.datatype is felis.types.Double:
                     data = rng.random(count, dtype=numpy.float64)
-                elif colDef.type == "INT":
+                elif colDef.datatype is felis.types.Int:
                     data = rng.integers(0, 1000, count, dtype=numpy.int32)
-                elif colDef.type == "BIGINT":
+                elif colDef.datatype is felis.types.Long:
                     data = rng.integers(0, 1000, count, dtype=numpy.int64)
-                elif colDef.type == "SMALLINT":
+                elif colDef.datatype is felis.types.Short:
                     data = rng.integers(0, 1000, count, dtype=numpy.int16)
-                elif "INT" in colDef.type:
-                    data = rng.integers(0, 100, count)
-                elif colDef.type == "BLOB":
-                    # random bytes
-                    data = pandas.Series([rng.bytes(100) for i in range(count)])
-                elif colDef.type == "DATETIME":
+                elif colDef.datatype is felis.types.Byte:
+                    data = rng.integers(0, 255, count, dtype=numpy.int8)
+                elif colDef.datatype is felis.types.Boolean:
+                    data = rng.integers(0, 1, count, dtype=numpy.int8)
+                elif colDef.datatype is felis.types.Binary:
+                    data = [rng.bytes(colDef.length) for i in range(count)]
+                elif colDef.datatype in (felis.types.Char, felis.types.String, felis.types.Unicode, felis.types.Text):
+                    chars = string.ascii_letters + string.digits
+                    random_strings = []
+                    for i in range(count):
+                        indices = rng.integers(0, len(chars), colDef.length, dtype=numpy.int16)
+                        random_strings.append("".join([chars[idx] for idx in indices]))
+                    data = random_strings
+                elif colDef.datatype is felis.types.Timestamp:
                     data = rng.integers(1500000000, 1600000000, count, dtype=numpy.int64)
                     data = numpy.array(data, dtype="datetime64[s]")
                 else:
                     data = rng.random(count)
-                catalog[colDef.name] = data
+                series = pandas.Series(data, name=colDef.name, index=catalog.index)
+                columns.append(series)
+        if columns:
+            catalog = pandas.concat([catalog] + columns, axis="columns")
+        return catalog

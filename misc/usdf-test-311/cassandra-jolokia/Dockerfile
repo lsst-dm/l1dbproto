@@ -1,6 +1,6 @@
 # Cassandra with jolokia JVM agent
 
-FROM cassandra:latest
+FROM cassandra:3.11
 
 ENV JOLOKIA_VERSION 1.7.2
 
