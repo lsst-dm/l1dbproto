@@ -616,7 +616,7 @@ buffer_pool_use_heap_if_exhausted: true
 # and will trigger a flush based on memtable_cleanup_threshold
 # If omitted, Cassandra will set both to 1/4 the size of the heap.
 # Min unit: MiB
-# memtable_heap_space: 2048MiB
+memtable_heap_space: 4096MiB
 # Min unit: MiB
 # memtable_offheap_space: 2048MiB
 
@@ -644,7 +644,7 @@ buffer_pool_use_heap_if_exhausted: true
 #
 # offheap_objects
 #    off heap objects
-memtable_allocation_type: offheap_objects
+memtable_allocation_type: heap_buffers
 
 # Limit memory usage for Merkle tree calculations during repairs. The default
 # is 1/16th of the available heap. The main tradeoff is that smaller trees
@@ -968,7 +968,7 @@ column_index_cache_size: 2KiB
 #
 # If your data directories are backed by SSD, you should increase this
 # to the number of cores.
-# concurrent_compactors: 1
+concurrent_compactors: 8
 
 # Number of simultaneous repair validations to allow. If not set or set to
 # a value less than 1, it defaults to the value of concurrent_compactors.
@@ -989,7 +989,7 @@ concurrent_materialized_view_builders: 1
 # Setting this to 0 disables throttling. Note that this accounts for all types
 # of compaction, including validation compaction (building Merkle trees
 # for repairs).
-compaction_throughput: 512MiB/s
+compaction_throughput: 0MiB/s
 
 # When compacting, the replacement sstable(s) can be opened before they
 # are completely written, and used in place of the prior sstables for
@@ -1476,7 +1476,7 @@ transparent_data_encryption_options:
 # Adjust the thresholds here if you understand the dangers and want to
 # scan more tombstones anyway.  These thresholds may also be adjusted at runtime
 # using the StorageService mbean.
-tombstone_warn_threshold: 1000
+tombstone_warn_threshold: 50000
 tombstone_failure_threshold: 100000
 
 # Filtering and secondary index queries at read consistency levels above ONE/LOCAL_ONE use a
@@ -1502,11 +1502,11 @@ replica_filtering_protection:
 # Log WARN on any multiple-partition batch size exceeding this value. 5KiB per batch by default.
 # Caution should be taken on increasing the size of this threshold as it can lead to node instability.
 # Min unit: KiB
-batch_size_warn_threshold: 5000KiB
+batch_size_warn_threshold: 10MiB
 
 # Fail any multiple-partition batch exceeding this value. 50KiB (10x warn threshold) by default.
 # Min unit: KiB
-batch_size_fail_threshold: 100000KiB
+batch_size_fail_threshold: 100MiB
 
 # Log WARN on any batches not of type LOGGED than span across more partitions than this limit
 unlogged_batch_across_partitions_warn_threshold: 10
@@ -1820,3 +1820,6 @@ drop_compact_storage_enabled: false
 #    heartbeat_file: /var/lib/cassandra/data/cassandra-heartbeat
 #    excluded_keyspaces: # comma separated list of keyspaces to exclude from the check
 #    excluded_tables: # comma separated list of keyspace.table pairs to exclude from the check
+
+# Secret undocumented parameter.
+disk_access_mode: mmap_index_only

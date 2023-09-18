@@ -2,7 +2,7 @@ services:
 
   cassandra:
 
-    image: fermented/cassandra-jolokia:latest
+    image: fermented/cassandra-jolokia:3.11
     build:
       context: ./cassandra-jolokia
       args:
@@ -20,12 +20,8 @@ services:
         source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/cassandra.yaml
         target: /etc/cassandra/cassandra.yaml
       - type: bind
-        source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/jvm-server.options
-        target: /etc/cassandra/jvm-server.options
-        read_only: true
-      - type: bind
-        source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/jvm11-server.options
-        target: /etc/cassandra/jvm11-server.options
+        source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/jvm.options
+        target: /etc/cassandra/jvm.options
         read_only: true
       - type: bind
         source: /sdf/home/s/salnikov/cassandra-docker/etc/cassandra/cassandra-env.sh
