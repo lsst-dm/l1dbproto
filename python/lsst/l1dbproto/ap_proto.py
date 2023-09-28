@@ -252,6 +252,7 @@ class APProto(object):
             if visit_id % 1000 == 0:
                 _LOG.info(COLOR_YELLOW + "+++ Start daily activities" + COLOR_RESET)
                 db.dailyJob()
+                self._daily_insert_id_cleanup(db, dt)
                 _LOG.info(COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET)
 
             _LOG.info(COLOR_GREEN + "+++ Start processing visit %s at %s" + COLOR_RESET, visit_id, dt)
@@ -769,3 +770,30 @@ class APProto(object):
         if columns:
             catalog = pandas.concat([catalog] + columns, axis="columns")
         return catalog
+
+    def _daily_insert_id_cleanup(self, db: Apdb, dt: DateTime) -> None:
+        """Remove old data from all InsertId tables.
+
+        Parameters
+        ----------
+        db : `Apdb`
+            Database instance.
+        dt : `DateTime`
+            Time of next visit.
+        """
+        cleanup_days = self.config.insert_id_keep_days
+        if cleanup_days < 0:
+            # no cleanup
+            return
+
+        insert_ids = db.getInsertIds()
+        if not insert_ids:
+            return
+
+        # Find latest InsertId. InsertIds should be ordered, but it's not
+        # guaranteed.
+        latest_dt = max(iid.insert_time.toPython() for iid in insert_ids)
+        dt = latest_dt - timedelta(days=self.config.insert_id_keep_days)
+        to_remove = [iid for iid in insert_ids if iid.insert_time.toPython() < dt]
+        _LOG.info(COLOR_YELLOW + "Will remove %d inserts" + COLOR_RESET, len(to_remove))
+        db.deleteInsertIds(to_remove)

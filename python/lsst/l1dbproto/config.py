@@ -85,6 +85,13 @@ class L1dbprotoConfig(Config):
         dtype=bool,
         doc="If True then store random values for fields not explicitly filled.",
         default=False)
+    insert_id_keep_days = Field[int](
+        doc=(
+            "Number of days of insert_id history to keep during daily cleanups. "
+            "Negative number disables cleanups."
+        ),
+        default=-1,
+    )
 
     @property
     def FOV_rad(self) -> float:
