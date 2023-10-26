@@ -29,7 +29,7 @@ a database.
 __all__ = ["APProto"]
 
 from argparse import ArgumentParser
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 import os
 import pandas
@@ -47,6 +47,7 @@ from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
 from lsst.dax.apdb import Apdb, ApdbSql, ApdbSqlConfig, ApdbCassandra, ApdbCassandraConfig, timer, ApdbTables
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
+from lsst.utils.iteration import chunk_iterable
 from .visit_info import VisitInfoStore
 
 
@@ -211,8 +212,10 @@ class APProto(object):
 
         # Initialize starting values from database visits table
         last_visit = visitInfoStore.lastVisit()
+        prev_visit_dt: datetime | None = None
         if last_visit is not None:
             start_visit_id = last_visit.visitId + 1
+            prev_visit_dt = last_visit.visitTime.toPython()
             nsec = last_visit.visitTime.nsecs(DateTime.TAI) + self.config.interval * 1_000_000_000
             start_time = DateTime(nsec, DateTime.TAI)
         else:
@@ -249,10 +252,16 @@ class APProto(object):
         visitTimes = _visitTimes(start_time, self.config.interval, self.args.num_visits)
         for visit_id, dt in enumerate(visitTimes, start_visit_id):
 
-            if visit_id % 1000 == 0:
-                _LOG.info(COLOR_YELLOW + "+++ Start daily activities" + COLOR_RESET)
-                db.dailyJob()
-                _LOG.info(COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET)
+            if prev_visit_dt is not None:
+                delta_to_prev = dt.toPython() - prev_visit_dt
+                # If delta to previous is much longer than interval means we
+                # just skipped dat time.
+                if delta_to_prev > timedelta(seconds=self.config.interval * 100):
+                    midday = DateTime(int((prev_visit_dt + delta_to_prev / 2).timestamp() * 1e9))
+                    _LOG.info(COLOR_YELLOW + "+++ Start daily activities at %s" + COLOR_RESET, midday)
+                    db.dailyJob()
+                    self._daily_insert_id_cleanup(db, midday)
+                    _LOG.info(COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET)
 
             _LOG.info(COLOR_GREEN + "+++ Start processing visit %s at %s" + COLOR_RESET, visit_id, dt)
             loop_timer = timer.Timer().start()
@@ -363,6 +372,8 @@ class APProto(object):
             if not self.args.no_update:
                 # store last visit info
                 visitInfoStore.saveVisit(visit_id, dt, self.lastObjectId, self.lastSourceId)
+
+            prev_visit_dt = dt.toPython()
 
             _LOG.info(COLOR_BLUE + "--- Finished processing visit %s, time: %s" +
                       COLOR_RESET, visit_id, loop_timer)
@@ -769,3 +780,34 @@ class APProto(object):
         if columns:
             catalog = pandas.concat([catalog] + columns, axis="columns")
         return catalog
+
+    def _daily_insert_id_cleanup(self, db: Apdb, dt: DateTime) -> None:
+        """Remove old data from all InsertId tables.
+
+        Parameters
+        ----------
+        db : `Apdb`
+            Database instance.
+        dt : `DateTime`
+            Time of next visit.
+        """
+        cleanup_days = self.config.insert_id_keep_days
+        if cleanup_days < 0:
+            # no cleanup
+            return
+
+        insert_ids = db.getInsertIds()
+        if not insert_ids:
+            return
+
+        # Find latest InsertId. InsertIds should be ordered, but it's not
+        # guaranteed.
+        latest_dt = max(iid.insert_time.toPython() for iid in insert_ids)
+        dt = latest_dt - timedelta(days=self.config.insert_id_keep_days)
+        to_remove = [iid for iid in insert_ids if iid.insert_time.toPython() < dt]
+        _LOG.info(COLOR_YELLOW + "Will remove %d inserts" + COLOR_RESET, len(to_remove))
+        for chunk in chunk_iterable(to_remove, 10_000):
+            try:
+                db.deleteInsertIds(to_remove)
+            except Exception as exc:
+                _LOG.error(COLOR_RED + "Error while removing next chunk of inserts: %s" + COLOR_RESET, exc)
