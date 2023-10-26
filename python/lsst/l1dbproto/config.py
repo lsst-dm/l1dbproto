@@ -56,7 +56,7 @@ class L1dbprotoConfig(Config):
                                     "if there was no observed source, def: 30"),
                                default=30)
     start_time = Field(dtype=str,
-                       default="2020-01-01T03:00:00",
+                       default="2020-01-01T20:00:00",
                        doc=('Starting time, format: YYYY-MM-DDThh:mm:ss'
                             '. Time is assumed to be in UTC time zone. Used only at'
                             ' first invocation to initialize database.'))
