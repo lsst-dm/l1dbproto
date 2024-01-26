@@ -114,7 +114,7 @@ def _nrows(table: Optional[pandas.DataFrame]) -> int:
         return len(table)
 
 
-# special code to makr sources ouside reagion
+# special code to mark sources outside region
 _OUTSIDER = -666
 
 # transient ID start value
@@ -593,7 +593,7 @@ class APProto(object):
         catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
 
         if len(catalog) == 0:
-            return pandas.DataFrame(columns=[ "ra", "dec", "diaObjectId"])
+            return pandas.DataFrame(columns=["ra", "dec", "diaObjectId"])
 
         cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type='expand'))
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
@@ -763,7 +763,12 @@ class APProto(object):
                     data = rng.integers(0, 1, count, dtype=numpy.int8)
                 elif colDef.datatype is felis.types.Binary:
                     data = [rng.bytes(colDef.length) for i in range(count)]
-                elif colDef.datatype in (felis.types.Char, felis.types.String, felis.types.Unicode, felis.types.Text):
+                elif colDef.datatype in (
+                    felis.types.Char,
+                    felis.types.String,
+                    felis.types.Unicode,
+                    felis.types.Text,
+                ):
                     chars = string.ascii_letters + string.digits
                     random_strings = []
                     for i in range(count):

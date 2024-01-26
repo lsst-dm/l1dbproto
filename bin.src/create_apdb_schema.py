@@ -31,7 +31,7 @@ from argparse import ArgumentParser
 import logging
 import sys
 
-from lsst.dax.apdb import (ApdbSql, ApdbSqlConfig, ApdbCassandra, ApdbCassandraConfig)
+from lsst.dax.apdb import (Apdb, ApdbSqlConfig, ApdbCassandraConfig)
 
 
 def _configLogger(verbosity):
@@ -64,15 +64,13 @@ def main():
     _configLogger(args.verbose)
 
     if args.backend == "sql":
+
         config = ApdbSqlConfig()
         if args.config:
             config.load(args.config)
         if args.dump_config:
             config.saveToStream(sys.stdout)
             return 0
-
-        # instantiate db interface
-        db = ApdbSql(config=config)
 
     elif args.backend == "cassandra":
 
@@ -83,11 +81,8 @@ def main():
             config.saveToStream(sys.stdout)
             return 0
 
-        # instantiate db interface
-        db = ApdbCassandra(config=config)
-
-    # do it
-    db.makeSchema(drop=args.drop)
+    # Make schema based on config.
+    Apdb.makeSchema(config, drop=args.drop)
 
 
 #
