@@ -81,7 +81,6 @@ def main():
             config.saveToStream(sys.stdout)
             return 0
 
-    # Make schema based on config.
     Apdb.makeSchema(config, drop=args.drop)
 
 
