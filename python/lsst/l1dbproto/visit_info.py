@@ -22,7 +22,7 @@
 
 from typing import NamedTuple, Optional
 
-from lsst.daf.base import DateTime
+import astropy.time
 
 
 class VisitInfo(NamedTuple):
@@ -31,7 +31,7 @@ class VisitInfo(NamedTuple):
     visitId: int
     """Visit ID, serial integer"""
 
-    visitTime: DateTime
+    visitTime: astropy.time.Time
     """Visit time"""
 
     lastObjectId: int
@@ -70,12 +70,12 @@ class VisitInfoStore:
         if len(words) != 4:
             raise ValueError(f"Unexpected content of {self.path}: `{data}`")
         visitId = int(words[0])
-        visitTime = DateTime(words[1], DateTime.TAI)
+        visitTime = astropy.time.Time(words[1], format="isot", scale="tai")
         lastObjectId = int(words[2])
         lastSourceId = int(words[3])
         return VisitInfo(visitId, visitTime, lastObjectId, lastSourceId)
 
-    def saveVisit(self, visitId: int, visitTime: DateTime, lastObjectId: int, lastSourceId: int
+    def saveVisit(self, visitId: int, visitTime: astropy.time.Time, lastObjectId: int, lastSourceId: int
                   ) -> None:
         """Store visit information.
 
@@ -91,5 +91,5 @@ class VisitInfoStore:
             Highest existing DIASource ID
         """
         with open(self.path, "w") as file:
-            isoTime = visitTime.toString(DateTime.TAI)
+            isoTime = visitTime.tai.isot
             file.write(f"{visitId} {isoTime} {lastObjectId} {lastSourceId}")
