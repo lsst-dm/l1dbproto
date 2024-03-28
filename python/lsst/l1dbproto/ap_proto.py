@@ -45,7 +45,7 @@ import numpy
 import numpy.random
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
-from lsst.dax.apdb import Apdb, ApdbSql, ApdbSqlConfig, ApdbCassandra, ApdbCassandraConfig, timer, ApdbTables
+from lsst.dax.apdb import Apdb, timer, ApdbTables
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 from lsst.utils.iteration import chunk_iterable
 from .visit_info import VisitInfoStore
@@ -138,12 +138,6 @@ class APProto(object):
             help="More verbose output, can use several times.",
         )
         parser.add_argument(
-            "--backend",
-            default="sql",
-            choices=["sql", "cassandra"],
-            help="Backend type, def: %(default)s",
-        )
-        parser.add_argument(
             "-n",
             "--num-visits",
             type=int,
@@ -202,26 +196,12 @@ class APProto(object):
         if self.args.app_config:
             self.config.load(self.args.app_config)
 
-        if self.args.backend == "sql":
-            self.dbconfig = ApdbSqlConfig()
-            if self.args.config:
-                self.dbconfig.load(self.args.config)
-        elif self.args.backend == "cassandra":
-            self.dbconfig = ApdbCassandraConfig()
-            if self.args.config:
-                self.dbconfig.load(self.args.config)
-
         if self.args.dump_config:
             self.config.saveToStream(sys.stdout)
-            self.dbconfig.saveToStream(sys.stdout)
             return 0
 
         # instantiate db interface
-        db: Apdb
-        if self.args.backend == "sql":
-            db = ApdbSql(config=self.dbconfig)
-        elif self.args.backend == "cassandra":
-            db = ApdbCassandra(config=self.dbconfig)
+        db = Apdb.from_uri(self.args.config)
 
         visitInfoStore = VisitInfoStore(self.args.visits_file)
 
