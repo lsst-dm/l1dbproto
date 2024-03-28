@@ -26,7 +26,7 @@ __all__ = ["L1dbprotoConfig"]
 
 import math
 
-from lsst.daf.base import DateTime
+import astropy.time
 from lsst.pex.config import Config
 from lsst.pex.config import Field, ChoiceField
 
@@ -95,13 +95,17 @@ class L1dbprotoConfig(Config):
 
     @property
     def FOV_rad(self) -> float:
-        """FOV in radians.
-        """
+        """FOV in radians."""
         return self.FOV_deg * math.pi / 180
 
     @property
-    def start_time_dt(self) -> DateTime:
-        """start_time as DateTime.
-        """
-        dt = DateTime(self.start_time, DateTime.TAI)
-        return dt
+    def start_time_astropy(self) -> astropy.time.Time:
+        """start_time as astropy Time."""
+        time = astropy.time.Time(self.start_time, format="isot", scale="tai")
+        return time
+
+    @property
+    def interval_astropy(self) -> astropy.time.TimeDelta:
+        """interval as astropy TimeDelta."""
+        delta = astropy.time.TimeDelta(self.interval, format="sec", scale="tai")
+        return delta
