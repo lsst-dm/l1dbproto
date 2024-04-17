@@ -24,18 +24,17 @@
 """Script to read ap_proto logs and produce CSV file.
 """
 
-from argparse import ArgumentParser
-from collections import defaultdict
 import gzip
 import logging
 import re
 import sys
 import time
+from argparse import ArgumentParser
+from collections import defaultdict
 
 
 def _configLogger(verbosity):
-    """ configure logging based on verbosity level """
-
+    """Configure logging based on verbosity level"""
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
@@ -43,8 +42,7 @@ def _configLogger(verbosity):
 
 
 class _Stat:
-
-    def __init__(self, cnt=0, sum=0.):
+    def __init__(self, cnt=0, sum=0.0):
         self._cnt = cnt
         self._sum = sum
 
@@ -80,11 +78,12 @@ _values = defaultdict(lambda: _Stat())
 
 
 def _sort_lines(iterable, num=100):
-    """sort input file according to timestamps.
+    """Sort input file according to timestamps.
 
     Log files are written from multiple process and sometimes ordering can
     be violated. This method sorts inputs according to timestamps.
     """
+
     def _sort_key(line):
         # extract timestamp
         return line.split()[:2]
@@ -106,7 +105,7 @@ def _new_visit(line):
     _values.clear()
     words = line.split()
     visit = int(words[-4])
-    _values['visit'] = visit
+    _values["visit"] = visit
 
 
 def _parse_counts(line):
@@ -117,65 +116,65 @@ def _parse_counts(line):
     count = int(words[-1])
     table_name = words[-4]
     if table_name.endswith("DiaObject"):
-        _values['obj_count'] += count
+        _values["obj_count"] += count
     elif table_name.endswith("DiaSource"):
-        _values['src_count'] += count
+        _values["src_count"] += count
     elif table_name.endswith("DiaForcedSource"):
-        _values['fsrc_count'] += count
+        _values["fsrc_count"] += count
 
 
 def _parse_timers(line):
     """
     Parse line with timer info.
     """
-    p = line.rfind('\x1b')
+    p = line.rfind("\x1b")
     if p > 0:
         line = line[:p]
-    words = line.replace('=', ' ').split()
+    words = line.replace("=", " ").split()
     real = float(words[-5])
     cpu = float(words[-3]) + float(words[-1])
     if "DiaObject select: " in line:
-        _values['obj_select_real'] += real
-        _values['obj_select_cpu'] += cpu
+        _values["obj_select_real"] += real
+        _values["obj_select_cpu"] += cpu
     elif "DiaObject truncate: " in line:
-        _values['obj_trunc_real'] += real
-        _values['obj_trunc_cpu'] += cpu
+        _values["obj_trunc_real"] += real
+        _values["obj_trunc_cpu"] += cpu
     elif "DiaObjectLast delete: " in line:
-        _values['obj_last_delete_real'] += real
-        _values['obj_last_delete_cpu'] += cpu
+        _values["obj_last_delete_real"] += real
+        _values["obj_last_delete_cpu"] += cpu
     elif "DiaObject insert: " in line or " DiaObjectNightly insert: " in line:
-        _values['obj_insert_real'] += real
-        _values['obj_insert_cpu'] += cpu
+        _values["obj_insert_real"] += real
+        _values["obj_insert_cpu"] += cpu
     elif "DiaObjectLast insert: " in line:
-        _values['obj_last_insert_real'] += real
-        _values['obj_last_insert_cpu'] += cpu
+        _values["obj_last_insert_real"] += real
+        _values["obj_last_insert_cpu"] += cpu
     elif "DiaObjectNightly copy: " in line:
-        _values['obj_daily_copy_real'] += real
-        _values['obj_daily_copy_cpu'] += cpu
+        _values["obj_daily_copy_real"] += real
+        _values["obj_daily_copy_cpu"] += cpu
     elif "DiaObjectNightly delete: " in line:
-        _values['obj_daily_delete_real'] += real
-        _values['obj_daily_delete_cpu'] += cpu
+        _values["obj_daily_delete_real"] += real
+        _values["obj_daily_delete_cpu"] += cpu
     elif "DiaSource select: " in line:
-        _values['src_select_real'] += real
-        _values['src_select_cpu'] += cpu
+        _values["src_select_real"] += real
+        _values["src_select_cpu"] += cpu
     elif "DiaSource insert: " in line:
-        _values['src_insert_real'] += real
-        _values['src_insert_cpu'] += cpu
+        _values["src_insert_real"] += real
+        _values["src_insert_cpu"] += cpu
     elif "DiaForcedSource select: " in line:
-        _values['fsrc_select_real'] += real
-        _values['fsrc_select_cpu'] += cpu
+        _values["fsrc_select_real"] += real
+        _values["fsrc_select_cpu"] += cpu
     elif "DiaForcedSource insert: " in line:
-        _values['fsrc_insert_real'] += real
-        _values['fsrc_insert_cpu'] += cpu
+        _values["fsrc_insert_real"] += real
+        _values["fsrc_insert_cpu"] += cpu
     elif " L1-store: " in line:
-        _values['store_real'] += real
-        _values['store_cpu'] += cpu
+        _values["store_real"] += real
+        _values["store_cpu"] += cpu
     elif " VisitProcessing: " in line:
-        _values['visit_proc_real'] += real
-        _values['visit_proc_cpu'] += cpu
+        _values["visit_proc_real"] += real
+        _values["visit_proc_cpu"] += cpu
     elif " Finished processing visit " in line and " tile " not in line:
-        _values['visit_real'] += real
-        _values['visit_cpu'] += cpu
+        _values["visit_real"] += real
+        _values["visit_cpu"] += cpu
 
 
 def _parse_select_count(line):
@@ -185,32 +184,49 @@ def _parse_select_count(line):
     words = line.split()
     if "database found" in line:
         if "forced sources" in line:
-            _values['fsrc_selected'] += int(words[-3])
+            _values["fsrc_selected"] += int(words[-3])
         elif "sources" in line:
-            _values['src_selected'] += int(words[-2])
+            _values["src_selected"] += int(words[-2])
         else:
-            _values['obj_selected'] += int(words[-2])
+            _values["obj_selected"] += int(words[-2])
     elif "after filtering" in line:
-        _values['obj_in_fov'] += int(words[-2])
+        _values["obj_in_fov"] += int(words[-2])
 
 
 # List of columns (keys in _values dictionary)
-_cols = ['visit',
-         'obj_select_real', 'obj_select_cpu',
-         'obj_last_delete_real', 'obj_last_insert_real',
-         'obj_trunc_real', 'obj_trunc_cpu',
-         'obj_insert_real', 'obj_insert_cpu',
-         'src_select_real', 'src_select_cpu',
-         'src_insert_real', 'src_insert_cpu',
-         'fsrc_select_real', 'fsrc_select_cpu',
-         'fsrc_insert_real', 'fsrc_insert_cpu',
-         'select_real',
-         'store_real', 'store_cpu',
-         'visit_proc_real', 'visit_proc_cpu',
-         'visit_real', 'visit_cpu',
-         'obj_selected', 'src_selected', 'fsrc_selected',
-         'obj_in_fov',
-         'obj_count', 'src_count', 'fsrc_count']
+_cols = [
+    "visit",
+    "obj_select_real",
+    "obj_select_cpu",
+    "obj_last_delete_real",
+    "obj_last_insert_real",
+    "obj_trunc_real",
+    "obj_trunc_cpu",
+    "obj_insert_real",
+    "obj_insert_cpu",
+    "src_select_real",
+    "src_select_cpu",
+    "src_insert_real",
+    "src_insert_cpu",
+    "fsrc_select_real",
+    "fsrc_select_cpu",
+    "fsrc_insert_real",
+    "fsrc_insert_cpu",
+    "select_real",
+    "store_real",
+    "store_cpu",
+    "visit_proc_real",
+    "visit_proc_cpu",
+    "visit_real",
+    "visit_cpu",
+    "obj_selected",
+    "src_selected",
+    "fsrc_selected",
+    "obj_in_fov",
+    "obj_count",
+    "src_count",
+    "fsrc_count",
+]
 
 
 def _value(key):
@@ -238,32 +254,32 @@ def _end_visit(line):
     """
     global _header
     if _header:
-        print(','.join(_cols))
+        print(",".join(_cols))
         _header = False
-    print(','.join(str(_value(c)) for c in _cols))
+    print(",".join(str(_value(c)) for c in _cols))
     sys.stdout.flush()
 
 
 # Map line sibstring to method
-_dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
-             (re.compile(" row count: "), _parse_counts),
-             (re.compile(": real="), _parse_timers),
-             (re.compile(" database found "), _parse_select_count),
-             (re.compile(" after filtering "), _parse_select_count),
-             (re.compile(r"Finished processing visit \d+, (?!tile)"), _end_visit),  # must be last
-             ]
+_dispatch = [
+    (re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
+    (re.compile(" row count: "), _parse_counts),
+    (re.compile(": real="), _parse_timers),
+    (re.compile(" database found "), _parse_select_count),
+    (re.compile(" after filtering "), _parse_select_count),
+    (re.compile(r"Finished processing visit \d+, (?!tile)"), _end_visit),  # must be last
+]
 
 
-_daily_dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
-                   (re.compile(": real="), _parse_timers),
-                   (re.compile("Done with daily activities"), _end_visit),  # must be last
-                   ]
+_daily_dispatch = [
+    (re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
+    (re.compile(": real="), _parse_timers),
+    (re.compile("Done with daily activities"), _end_visit),  # must be last
+]
 
 
 def _follow(input, stop_timeout_sec=60):
-    """Implement reading from a file that is being written into (tail -F).
-    """
-
+    """Implement reading from a file that is being written into (tail -F)."""
     stop_re = re.compile("Stopping MPI tile processes")
 
     last_read = time.time()
@@ -271,7 +287,6 @@ def _follow(input, stop_timeout_sec=60):
     block_size = 64 * 1024
     stop = False
     while True:
-
         if "\n" not in buffer:
             if stop:
                 return
@@ -291,8 +306,8 @@ def _follow(input, stop_timeout_sec=60):
 
         idx = buffer.find("\n")
         if idx >= 0:
-            line = buffer[:idx+1]
-            buffer = buffer[idx+1:]
+            line = buffer[: idx + 1]
+            buffer = buffer[idx + 1 :]
 
             if stop_re.match(line):
                 # stop after reading remaing lines
@@ -302,21 +317,31 @@ def _follow(input, stop_timeout_sec=60):
 
 
 def main():
-
-    descr = 'Read ap_proto log and extract few numbers into csv.'
+    """Parse log files and generate CSV output."""
+    descr = "Read ap_proto log and extract few numbers into csv."
     parser = ArgumentParser(description=descr)
-    parser.add_argument('-v', '--verbose', action='count', default=0,
-                        help='More verbose output, can use several times.')
-    parser.add_argument('-s', '--short', action='store_true', default=False,
-                        help='Save fewer columns into CSV file.')
-    parser.add_argument('-d', '--daily', action='store_true', default=False,
-                        help='Extract numbers from daily activities.')
-    parser.add_argument("-F", "--follow", default=False, action="store_true",
-                        help="Continue reading as file grows.")
-    parser.add_argument("--follow-timeout", default=60, type=int, metavar="SECONDS",
-                        help="Max number of seconds to wait for file to grow, def: %(default)s.")
-    parser.add_argument('file', nargs='+',
-                        help='Name of input log file, optionally compressed, use "-" for stdin')
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0, help="More verbose output, can use several times."
+    )
+    parser.add_argument(
+        "-s", "--short", action="store_true", default=False, help="Save fewer columns into CSV file."
+    )
+    parser.add_argument(
+        "-d", "--daily", action="store_true", default=False, help="Extract numbers from daily activities."
+    )
+    parser.add_argument(
+        "-F", "--follow", default=False, action="store_true", help="Continue reading as file grows."
+    )
+    parser.add_argument(
+        "--follow-timeout",
+        default=60,
+        type=int,
+        metavar="SECONDS",
+        help="Max number of seconds to wait for file to grow, def: %(default)s.",
+    )
+    parser.add_argument(
+        "file", nargs="+", help='Name of input log file, optionally compressed, use "-" for stdin'
+    )
     args = parser.parse_args()
 
     # configure logging
@@ -326,19 +351,24 @@ def main():
 
     if args.short:
         global _cols
-        _cols = ['visit', 'visit_real', 'visit_cpu',
-                 'visit_proc_real', 'visit_proc_cpu',
-                 'obj_count', 'src_count', 'fsrc_count']
+        _cols = [
+            "visit",
+            "visit_real",
+            "visit_cpu",
+            "visit_proc_real",
+            "visit_proc_cpu",
+            "obj_count",
+            "src_count",
+            "fsrc_count",
+        ]
 
     if args.daily:
         dispatch = _daily_dispatch
-        _cols = ['visit',
-                 'obj_daily_copy_real',
-                 'obj_daily_delete_real']
+        _cols = ["visit", "obj_daily_copy_real", "obj_daily_delete_real"]
 
     # open each file in order
     for input in args.file:
-        if input == '-':
+        if input == "-":
             input = sys.stdin
         else:
             f = gzip.open(input, "rt")

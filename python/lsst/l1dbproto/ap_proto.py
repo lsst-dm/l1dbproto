@@ -28,28 +28,28 @@ a database.
 
 __all__ = ["APProto"]
 
-from argparse import ArgumentParser
-from datetime import timedelta
 import logging
 import os
-import pandas
 import string
 import sys
 import time
-from typing import Any, cast, Iterator, List, Optional, Tuple
+from argparse import ArgumentParser
+from datetime import timedelta
+from typing import Any, Iterator, List, Optional, Tuple, cast
 
-from mpi4py import MPI
 import astropy.time
 import felis.datamodel
 import numpy
 import numpy.random
+import pandas
+from lsst.dax.apdb import Apdb, ApdbReplica, ApdbTables, timer
 from lsst.geom import SpherePoint
-from . import L1dbprotoConfig, DIA, generators, geom
-from lsst.dax.apdb import Apdb, ApdbTables, ApdbReplica, timer
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 from lsst.utils.iteration import chunk_iterable
-from .visit_info import VisitInfoStore
+from mpi4py import MPI
 
+from . import DIA, L1dbprotoConfig, generators, geom
+from .visit_info import VisitInfoStore
 
 COLOR_RED = "\033[1;31m"
 COLOR_GREEN = "\033[1;32m"
@@ -72,15 +72,13 @@ def _configLogger(verbosity: int) -> None:
         old_factory = logging.getLogRecordFactory()
 
         def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-            """Logging record factory that adds MPI rank to a record."""
+            """Make logging record that adds MPI rank to a record."""
             record = old_factory(*args, **kwargs)
             record.mpi_rank = rank
             return record
 
         logging.setLogRecordFactory(record_factory)
-        logfmt = (
-            "%(asctime)s [%(levelname)s] [rank=%(mpi_rank)03d] %(name)s: %(message)s"
-        )
+        logfmt = "%(asctime)s [%(levelname)s] [rank=%(mpi_rank)03d] %(name)s: %(message)s"
     else:
         logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
@@ -90,14 +88,14 @@ def _configLogger(verbosity: int) -> None:
 
 
 def _isDayTime(visit_time: astropy.time.Time) -> bool:
-    """Returns true if time is not good for observing."""
+    """Return true if time is not good for observing."""
     return 6 <= visit_time.datetime.hour < 20
 
 
 def _visitTimes(
     start_time: astropy.time.Time, interval: astropy.time.TimeDelta, count: int
 ) -> Iterator[astropy.time.Time]:
-    """Generator for visit times."""
+    """Generate visit times."""
     visit_time = start_time
     while count > 0:
         if not _isDayTime(visit_time):
@@ -246,9 +244,7 @@ class APProto(object):
             _LOG.info("Will divide FOV into %d regions", num_tiles)
 
         src_read_period = self.config.src_read_period
-        src_read_visits = round(
-            self.config.src_read_period * self.config.src_read_duty_cycle
-        )
+        src_read_visits = round(self.config.src_read_period * self.config.src_read_duty_cycle)
         _LOG.info(
             "Will read sources for %d visits out of %d",
             src_read_visits,
@@ -260,8 +256,9 @@ class APProto(object):
         var_sources = numpy.load(self.config.sources_file)
         _LOG.info("Finished loading variable sources, count = %s", len(var_sources))
 
-        # diaObjectId for last new DIA object, for variable sources we use their
-        # index as objectId, for transients we want to use ID outside that range
+        # diaObjectId for last new DIA object, for variable sources we use
+        # their index as objectId, for transients we want to use ID outside
+        # that range
         if last_visit is not None and last_visit.lastObjectId is not None:
             self.lastObjectId = max(self.lastObjectId, last_visit.lastObjectId)
         if self.lastObjectId < len(var_sources):
@@ -275,9 +272,7 @@ class APProto(object):
         _LOG.info("lastSourceId: %s", self.lastSourceId)
 
         # loop over visits
-        visitTimes = _visitTimes(
-            start_time, self.config.interval_astropy, self.args.num_visits
-        )
+        visitTimes = _visitTimes(start_time, self.config.interval_astropy, self.args.num_visits)
         for visit_id, visit_time in enumerate(visitTimes, start_visit_id):
             if prev_visit_time is not None:
                 delta_to_prev = visit_time - prev_visit_time
@@ -291,9 +286,7 @@ class APProto(object):
                     )
                     db.dailyJob()
                     self._daily_insert_id_cleanup(self.args.config, midday)
-                    _LOG.info(
-                        COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET
-                    )
+                    _LOG.info(COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET)
 
             _LOG.info(
                 COLOR_GREEN + "+++ Start processing visit %s at %s" + COLOR_RESET,
@@ -305,13 +298,12 @@ class APProto(object):
             with timer.Timer("DIA"):
                 # point telescope in random southern direction
                 pointing_xyz = generators.rand_sphere_xyz(1, -1)[0]
-                pointing_v = UnitVector3d(
-                    pointing_xyz[0], pointing_xyz[1], pointing_xyz[2]
-                )
+                pointing_v = UnitVector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
                 ra = LonLat.longitudeOf(pointing_v).asDegrees()
                 dec = LonLat.latitudeOf(pointing_v).asDegrees()
 
-                # sphgeom.Circle opening angle is actually a half of opening angle
+                # sphgeom.Circle opening angle is actually a half of opening
+                # angle
                 region = Circle(pointing_v, Angle(self.config.FOV_rad / 2))
 
                 _LOG.info("Pointing ra, dec = %s, %s; xyz = %s", ra, dec, pointing_xyz)
@@ -341,9 +333,10 @@ class APProto(object):
                     for tbl, count in sorted(counts.items()):
                         _LOG.info("%s row count: %s", tbl, count)
 
-            # numpy seems to do some multi-threaded stuff which "leaks" CPU cycles to the code below
-            # and it gets counted as resource usage in timers, add a short delay here so that threads
-            # finish and don't influence our timers below.
+            # numpy seems to do some multi-threaded stuff which "leaks" CPU
+            # cycles to the code below and it gets counted as resource usage
+            # in timers, add a short delay here so that threads finish and
+            # don't influence our timers below.
             time.sleep(0.1)
 
             if self.config.divide == 1:
@@ -353,15 +346,14 @@ class APProto(object):
 
             else:
                 if self.config.mp_mode == "fork":
-                    tiles = geom.make_tiles(
-                        self.config.FOV_rad, self.config.divide, pointing_v
-                    )
+                    tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
 
                     with timer.Timer("VisitProcessing"):
                         # spawn subprocesses to handle individual tiles
                         children = []
                         for ix, iy, region in tiles:
-                            # make sure lastSourceId is unique in in each process
+                            # make sure lastSourceId is unique in in each
+                            # process
                             self.lastSourceId += len(sources)
                             tile = (ix, iy)
 
@@ -391,25 +383,19 @@ class APProto(object):
                                 pid, status = os.waitpid(pid, 0)
                                 if status != 0:
                                     _LOG.warning(
-                                        COLOR_RED
-                                        + "Child process PID=%s failed: %s"
-                                        + COLOR_RESET,
+                                        COLOR_RED + "Child process PID=%s failed: %s" + COLOR_RESET,
                                         pid,
                                         status,
                                     )
                             except OSError as exc:
                                 _LOG.warning(
-                                    COLOR_RED
-                                    + "wait failed for PID=%s: %s"
-                                    + COLOR_RESET,
+                                    COLOR_RED + "wait failed for PID=%s: %s" + COLOR_RESET,
                                     pid,
                                     exc,
                                 )
 
                 elif self.config.mp_mode == "mpi":
-                    tiles = geom.make_tiles(
-                        self.config.FOV_rad, self.config.divide, pointing_v
-                    )
+                    tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
                     _LOG.info("Split FOV into %d tiles for MPI", len(tiles))
 
                     # spawn subprocesses to handle individual tiles, special
@@ -434,17 +420,13 @@ class APProto(object):
                         # make sure lastSourceId is unique in in each process
 
                     with timer.Timer("VisitProcessing"):
-                        _LOG.info(
-                            "Scatter sources to %d tile processes", len(tile_data)
-                        )
+                        _LOG.info("Scatter sources to %d tile processes", len(tile_data))
                         self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data)
                     self.lastSourceId = lastSourceId
 
             if not self.args.no_update:
                 # store last visit info
-                visitInfoStore.saveVisit(
-                    visit_id, visit_time, self.lastObjectId, self.lastSourceId
-                )
+                visitInfoStore.saveVisit(visit_id, visit_time, self.lastObjectId, self.lastSourceId)
 
             prev_visit_time = visit_time
 
@@ -463,13 +445,12 @@ class APProto(object):
         return 0
 
     def run_mpi_tile_loop(self, db: Apdb, comm: Any) -> None:
-        """This is the method executing visit loop inside non-master MPI process"""
+        """Execute visit loop inside non-master MPI process"""
         while self.run_mpi_tile(db, comm):
             pass
 
     def run_mpi_tile(self, db: Apdb, comm: Any, tile_data: Any = None) -> Any:
-        """This is the method executed by each MPI tile process for a single
-        visit.
+        """Execute single-visit processing in each MPI tile process.
 
         Parameters
         ----------
@@ -516,9 +497,7 @@ class APProto(object):
             )
             self.lastSourceId = lastSourceId
             _LOG.info(
-                COLOR_MAGENTA
-                + "+++ Start processing visit %s tile %s at %s"
-                + COLOR_RESET,
+                COLOR_MAGENTA + "+++ Start processing visit %s tile %s at %s" + COLOR_RESET,
                 visit_id,
                 tile,
                 visit_time,
@@ -529,9 +508,7 @@ class APProto(object):
             except Exception as exc:
                 _LOG.error("Exception in visit processing: %s", exc, exc_info=True)
             _LOG.info(
-                COLOR_CYAN
-                + "--- Finished processing visit %s tile %s, time: %s"
-                + COLOR_RESET,
+                COLOR_CYAN + "--- Finished processing visit %s tile %s, time: %s" + COLOR_RESET,
                 visit_id,
                 tile,
                 loop_timer,
@@ -582,9 +559,7 @@ class APProto(object):
             name = "tile={}x{} ".format(*tile)
 
         src_read_period = self.config.src_read_period
-        src_read_visits = round(
-            self.config.src_read_period * self.config.src_read_duty_cycle
-        )
+        src_read_visits = round(self.config.src_read_period * self.config.src_read_duty_cycle)
         do_read_src = visit_id % src_read_period < src_read_visits
 
         # make a mask
@@ -611,9 +586,7 @@ class APProto(object):
             srcs = self._makeDiaSources(sources, indices, visit_time, visit_id)
 
             # do forced photometry (can extends objects)
-            fsrcs, objects = self._forcedPhotometry(
-                objects, latest_objects, visit_time, visit_id
-            )
+            fsrcs, objects = self._forcedPhotometry(objects, latest_objects, visit_time, visit_id)
 
             if self.config.fill_empty_fields:
                 objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
@@ -627,9 +600,7 @@ class APProto(object):
                 read_srcs = db.getDiaSources(region, latest_objects_ids, visit_time)
                 _LOG.info(name + "database found %s sources", _nrows(read_srcs))
 
-                read_srcs = db.getDiaForcedSources(
-                    region, latest_objects_ids, visit_time
-                )
+                read_srcs = db.getDiaForcedSources(region, latest_objects_ids, visit_time)
                 _LOG.info(name + "database found %s forced sources", _nrows(read_srcs))
         else:
             _LOG.info("skipping reading of sources for this visit")
@@ -642,9 +613,7 @@ class APProto(object):
                 _LOG.info(name + "will store %d ForcedSources", len(fsrcs))
                 db.store(visit_time, objects, srcs, fsrcs)
 
-    def _filterDiaObjects(
-        self, latest_objects: pandas.DataFrame, region: Region
-    ) -> pandas.DataFrame:
+    def _filterDiaObjects(self, latest_objects: pandas.DataFrame, region: Region) -> pandas.DataFrame:
         """Filter out objects from a catalog which are outside region.
 
         Parameters
@@ -700,9 +669,7 @@ class APProto(object):
         def polar(row: Any) -> pandas.Series:
             v3d = Vector3d(row.x, row.y, row.z)
             sp = SpherePoint(v3d)
-            return pandas.Series(
-                [sp.getRa().asDegrees(), sp.getDec().asDegrees()], index=["ra", "dec"]
-            )
+            return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()], index=["ra", "dec"])
 
         catalog = pandas.DataFrame(sources, columns=["x", "y", "z"])
         catalog["diaObjectId"] = indices
@@ -711,9 +678,7 @@ class APProto(object):
         if len(catalog) == 0:
             return pandas.DataFrame(columns=["ra", "dec", "diaObjectId"])
 
-        cat_polar = cast(
-            pandas.DataFrame, catalog.apply(polar, axis=1, result_type="expand")
-        )
+        cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type="expand"))
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
         catalog = cat_polar
 
@@ -753,9 +718,7 @@ class APProto(object):
 
         if objects.empty:
             return (
-                pandas.DataFrame(
-                    columns=["diaObjectId", "ccdVisitId", "midpointMjdTai", "flags"]
-                ),
+                pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midpointMjdTai", "flags"]),
                 objects,
             )
 
@@ -773,9 +736,7 @@ class APProto(object):
         )
 
         # do forced photometry for non-detected DiaObjects (newer than cutoff)
-        o1 = cast(
-            pandas.DataFrame, latest_objects[~latest_objects["diaObjectId"].isin(ids)]
-        )
+        o1 = cast(pandas.DataFrame, latest_objects[~latest_objects["diaObjectId"].isin(ids)])
 
         # only do it for 30 days after last detection
         cutoff = visit_time.datetime - timedelta(days=self.config.forced_cutoff_days)
@@ -838,9 +799,7 @@ class APProto(object):
         def polar(row: Any) -> pandas.Series:
             v3d = Vector3d(row.x, row.y, row.z)
             sp = SpherePoint(v3d)
-            return pandas.Series(
-                [sp.getRa().asDegrees(), sp.getDec().asDegrees()], index=["ra", "dec"]
-            )
+            return pandas.Series([sp.getRa().asDegrees(), sp.getDec().asDegrees()], index=["ra", "dec"])
 
         midpointMjdTai = visit_time.tai.mjd
 
@@ -851,9 +810,7 @@ class APProto(object):
         if len(catalog) == 0:
             cat_polar = pandas.DataFrame([], columns=["ra", "dec", "diaObjectId"])
         else:
-            cat_polar = cast(
-                pandas.DataFrame, catalog.apply(polar, axis=1, result_type="expand")
-            )
+            cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type="expand"))
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
         catalog = cat_polar
         catalog["ccdVisitId"] = visit_id
@@ -864,16 +821,12 @@ class APProto(object):
         catalog["flags"] = 0
 
         nrows = catalog.shape[0]
-        catalog["diaSourceId"] = range(
-            self.lastSourceId + 1, self.lastSourceId + 1 + nrows
-        )
+        catalog["diaSourceId"] = range(self.lastSourceId + 1, self.lastSourceId + 1 + nrows)
         self.lastSourceId += nrows
 
         return catalog
 
-    def _fillRandomData(
-        self, catalog: pandas.DataFrame, table: ApdbTables, db: Apdb
-    ) -> pandas.DataFrame:
+    def _fillRandomData(self, catalog: pandas.DataFrame, table: ApdbTables, db: Apdb) -> pandas.DataFrame:
         """Add missing fields to a catalog and fill it with random numbers.
 
         Parameters
@@ -927,15 +880,11 @@ class APProto(object):
                     chars = string.ascii_letters + string.digits
                     random_strings = []
                     for i in range(count):
-                        indices = rng.integers(
-                            0, len(chars), colDef.length, dtype=numpy.int16
-                        )
+                        indices = rng.integers(0, len(chars), colDef.length, dtype=numpy.int16)
                         random_strings.append("".join([chars[idx] for idx in indices]))
                     data = random_strings
                 elif colDef.datatype is felis.datamodel.DataType.timestamp:
-                    data = rng.integers(
-                        1500000000, 1600000000, count, dtype=numpy.int64
-                    )
+                    data = rng.integers(1500000000, 1600000000, count, dtype=numpy.int64)
                     data = numpy.array(data, dtype="datetime64[s]")
                 else:
                     data = rng.random(count)
@@ -968,9 +917,7 @@ class APProto(object):
         # Find latest InsertId. InsertIds should be ordered, but it's not
         # guaranteed.
         latest_time = max(chunk.last_update_time for chunk in chunks)
-        drop_time = latest_time - astropy.time.TimeDelta(
-            self.config.replica_chunk_keep_days, format="jd"
-        )
+        drop_time = latest_time - astropy.time.TimeDelta(self.config.replica_chunk_keep_days, format="jd")
         chunks_to_remove = [chunk for chunk in chunks if chunk.last_update_time < drop_time]
         _LOG.info(COLOR_YELLOW + "Will remove %d inserts" + COLOR_RESET, len(chunks_to_remove))
         for to_remove in chunk_iterable(chunks_to_remove, 10_000):
@@ -978,8 +925,6 @@ class APProto(object):
                 replica.deleteReplicaChunks(to_remove)
             except Exception as exc:
                 _LOG.error(
-                    COLOR_RED
-                    + "Error while removing next chunk of inserts: %s"
-                    + COLOR_RESET,
+                    COLOR_RED + "Error while removing next chunk of inserts: %s" + COLOR_RESET,
                     exc,
                 )

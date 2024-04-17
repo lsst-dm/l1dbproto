@@ -26,8 +26,8 @@ import astropy.time
 
 
 class VisitInfo(NamedTuple):
-    """Information about a visit
-    """
+    """Information about a visit."""
+
     visitId: int
     """Visit ID, serial integer"""
 
@@ -49,11 +49,12 @@ class VisitInfoStore:
     path : str
         Location of a file to store the visit data.
     """
+
     def __init__(self, path: str):
         self.path = path
 
     def lastVisit(self) -> Optional[VisitInfo]:
-        """Returns last visit information.
+        """Return last visit information.
 
         Returns
         -------
@@ -75,8 +76,9 @@ class VisitInfoStore:
         lastSourceId = int(words[3])
         return VisitInfo(visitId, visitTime, lastObjectId, lastSourceId)
 
-    def saveVisit(self, visitId: int, visitTime: astropy.time.Time, lastObjectId: int, lastSourceId: int
-                  ) -> None:
+    def saveVisit(
+        self, visitId: int, visitTime: astropy.time.Time, lastObjectId: int, lastSourceId: int
+    ) -> None:
         """Store visit information.
 
         Parameters

@@ -25,13 +25,14 @@
 """
 
 import math
-import numpy
 import unittest
 
+import numpy
 from lsst.l1dbproto import generators
 
 
 class TestGenerators(unittest.TestCase):
+    """Unit test for generators module."""
 
     def setUp(self) -> None:
         pass
@@ -40,14 +41,13 @@ class TestGenerators(unittest.TestCase):
         pass
 
     def test_sphere_xyz(self) -> None:
-        """ Test for points-on-sphere generator """
-
+        """Test for points-on-sphere generator"""
         points = generators.rand_sphere_xyz(1)
         self.assertEqual(points.shape, (1, 3))
 
         points = generators.rand_sphere_xyz(100)
         for norm in numpy.linalg.norm(points, axis=1):
-            self.assertAlmostEqual(norm, 1.)
+            self.assertAlmostEqual(norm, 1.0)
 
         # covers whole sphere, z in range -1 to 1
         self.assertLess(min(points[:, 2]), 0)
@@ -62,18 +62,17 @@ class TestGenerators(unittest.TestCase):
         self.assertLess(max(points[:, 2]), 0)
 
     def test_cone_xyz(self) -> None:
-        """ Test for vector-in-cone generator """
-
-        points = generators.rand_cone_xyz(numpy.array([0., 0., 1.]), 0., 1)
+        """Test for vector-in-cone generator"""
+        points = generators.rand_cone_xyz(numpy.array([0.0, 0.0, 1.0]), 0.0, 1)
         self.assertEqual(points.shape, (1, 3))
 
-        points = generators.rand_cone_xyz(numpy.array([0., 0., 1.]), 0., 100)
+        points = generators.rand_cone_xyz(numpy.array([0.0, 0.0, 1.0]), 0.0, 100)
         for norm in numpy.linalg.norm(points, axis=1):
-            self.assertAlmostEqual(norm, 1.)
+            self.assertAlmostEqual(norm, 1.0)
         for point in points:
-            self.assertTrue(numpy.array_equal(point, numpy.array([0., 0., 1.])))
+            self.assertTrue(numpy.array_equal(point, numpy.array([0.0, 0.0, 1.0])))
 
-        points = generators.rand_cone_xyz(numpy.array([0., 0., 1.]), math.pi / 2, 100)
+        points = generators.rand_cone_xyz(numpy.array([0.0, 0.0, 1.0]), math.pi / 2, 100)
         self.assertGreater(min(points[:, 2]), math.cos(math.pi / 4))
         self.assertGreater(min(points[:, 0]), -math.cos(math.pi / 4))
         self.assertLess(max(points[:, 0]), math.cos(math.pi / 4))

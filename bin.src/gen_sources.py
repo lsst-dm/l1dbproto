@@ -27,18 +27,17 @@ Generates and saves the list of sky coordinates for the sources to
 be used by other applications.
 """
 
-from argparse import ArgumentParser
 import logging
 import math
-import numpy
 import sys
+from argparse import ArgumentParser
 
+import numpy
 from lsst.l1dbproto import generators
 
 
 def _configLogger(verbosity):
-    """ configure logging based on verbosity level """
-
+    """Configure logging based on verbosity level"""
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
@@ -49,19 +48,30 @@ FOV = 3.5  # degrees
 
 
 def main():
-
-    descr = 'One-line application description.'
+    """Generate sources based on command line arguments."""
+    descr = "One-line application description."
     parser = ArgumentParser(description=descr)
-    parser.add_argument('-v', '--verbose', action='count', default=0,
-                        help='More verbose output, can use several times.')
-    parser.add_argument('-m', '--mode', action='store', default='xyz',
-                        help='Defines type of output data, possible values are "xyz", def: "xyz"')
-    parser.add_argument('-H', '--hemi', type=int, default=0,
-                        help='Zero for whole sky, negative for southern hemisphere, '
-                        'positive for northern, def: 0')
-    parser.add_argument('-n', '--counts', type=int, default=10000,
-                        help='Number of sources per visit, def: 10000')
-    parser.add_argument('file', help='Name of output file')
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0, help="More verbose output, can use several times."
+    )
+    parser.add_argument(
+        "-m",
+        "--mode",
+        action="store",
+        default="xyz",
+        help='Defines type of output data, possible values are "xyz", def: "xyz"',
+    )
+    parser.add_argument(
+        "-H",
+        "--hemi",
+        type=int,
+        default=0,
+        help="Zero for whole sky, negative for southern hemisphere, " "positive for northern, def: 0",
+    )
+    parser.add_argument(
+        "-n", "--counts", type=int, default=10000, help="Number of sources per visit, def: 10000"
+    )
+    parser.add_argument("file", help="Name of output file")
     args = parser.parse_args()
 
     # configure logging

@@ -24,19 +24,20 @@
 from __future__ import annotations
 
 import math
-import numpy
 from typing import Tuple
+
+import numpy
 
 from . import generators
 
 
 class DIA(object):
-    """
-    Class simulating difference image analysis.
+    """Class simulating difference image analysis.
 
     This class is responsible for producing a set of DiaSources and
     DiaForcedSources.
     """
+
     def __init__(self, xyz: numpy.ndarray, open_angle: float, vars: numpy.ndarray, n_trans: int):
         """
         @param xyz:  unit vector giving pointing direction
@@ -44,15 +45,13 @@ class DIA(object):
         @param vars: list (ndarray) of all known variable sources
         @param n_trans: number of transients per visit
         """
-
         self._xyz = xyz
         self._open_angle = open_angle
         self._vars = vars
         self._n_trans = n_trans
 
     def makeSources(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
-        """
-        Generate a set of DiaSources.
+        """Generate a set of DiaSources.
 
         Some sources originate from the known variable sources (specified
         in constructor), for those sources we return their index in the
@@ -63,7 +62,7 @@ class DIA(object):
         2. array of indices of variable sources, 1-dim ndarray, transient
            sources have negative indices.
         """
-        cos_open = math.cos(self._open_angle / 2.)
+        cos_open = math.cos(self._open_angle / 2.0)
 
         # calc inner product of every variable source to our pointing direction
         products = numpy.inner(self._xyz, self._vars)

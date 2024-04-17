@@ -25,14 +25,15 @@
 """
 
 import math
-import numpy as np
 import unittest
 
-from lsst.l1dbproto import geom
 import lsst.sphgeom as sph
+import numpy as np
+from lsst.l1dbproto import geom
 
 
 class TestGeom(unittest.TestCase):
+    """Unit tests for geom module."""
 
     def setUp(self) -> None:
         pass
@@ -42,19 +43,19 @@ class TestGeom(unittest.TestCase):
 
     def test_rot_matrix(self) -> None:
         """Testing rotation matrix method"""
-        a = np.array([0., 0., 1.])
-        b = np.array([0., 0., 1.])
+        a = np.array([0.0, 0.0, 1.0])
+        b = np.array([0.0, 0.0, 1.0])
         R = geom.rotation_matrix(a, b)
         self.assertTrue(np.array_equal(R, np.identity(3)))
 
-        a = np.array([1., 0., 0.])
-        b = np.array([0., 0., 1.])
+        a = np.array([1.0, 0.0, 0.0])
+        b = np.array([0.0, 0.0, 1.0])
         R = geom.rotation_matrix(a, b)
         expected = np.array([[0, 0, -1], [0, 1, 0], [1, 0, 0]], dtype=float)
         self.assertTrue(np.array_equal(R, expected))
 
-        a = np.array([0., -1., 0.])
-        b = np.array([0., 0., 1.])
+        a = np.array([0.0, -1.0, 0.0])
+        b = np.array([0.0, 0.0, 1.0])
         R = geom.rotation_matrix(a, b)
         expected = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=float)
         self.assertTrue(np.array_equal(R, expected))
@@ -74,7 +75,7 @@ class TestGeom(unittest.TestCase):
         self.assertEqual(len(tiles), 64)
 
         tiles = geom.make_square_tiles(3.5 * math.pi / 180, 15, 15, exclude_disjoint=True)
-        self.assertEqual(len(tiles), 15*15 - 4*6)
+        self.assertEqual(len(tiles), 15 * 15 - 4 * 6)
 
     def test_make_camera_tiles(self) -> None:
 
@@ -101,12 +102,14 @@ class TestGeom(unittest.TestCase):
     def _tri_test_one(
         self, v0: sph.UnitVector3d, v1: sph.UnitVector3d, v2: sph.UnitVector3d, area: float
     ) -> None:
-        """Test for triangle area with all permutations of vertices.
-        """
+        """Test for triangle area with all permutations of vertices."""
         triangles = [
-            (v0, v1, v2), (v0, v2, v1),
-            (v1, v0, v2), (v1, v2, v0),
-            (v2, v0, v1), (v2, v1, v0),
+            (v0, v1, v2),
+            (v0, v2, v1),
+            (v1, v0, v2),
+            (v1, v2, v0),
+            (v2, v0, v1),
+            (v2, v1, v0),
         ]
         for triangle in triangles:
             a = geom.triangle_area(*triangle)
@@ -120,13 +123,13 @@ class TestGeom(unittest.TestCase):
         v0 = sph.UnitVector3d(0, 0, 1)
         v1 = sph.UnitVector3d(1, 0, 0)
         v2 = sph.UnitVector3d(0, 1, 0)
-        self._tri_test_one(v0, v1, v2, sphere_area/8)
+        self._tri_test_one(v0, v1, v2, sphere_area / 8)
 
         # another quarter of hemisphere
         v0 = sph.UnitVector3d(0, 0, -1)
         v1 = sph.UnitVector3d(1, 0, 0)
         v2 = sph.UnitVector3d(0, -1, 0)
-        self._tri_test_one(v0, v1, v2, sphere_area/8)
+        self._tri_test_one(v0, v1, v2, sphere_area / 8)
 
         # small triangle near equator
         dz = 1e-6
@@ -137,19 +140,19 @@ class TestGeom(unittest.TestCase):
         area = dz * dy
         self._tri_test_one(v0, v1, v2, area)
 
-    # def test_area_poly(self):
+        # def test_area_poly(self):
 
         dz = 1e-6
         dy = 1e-6
 
         # one quarter of hemisphere
-        v0 = sph.UnitVector3d(1, 0, -dz/2)
-        v1 = sph.UnitVector3d(1, 0, dz/2)
-        v2 = sph.UnitVector3d(1, dy, dz/2)
-        v3 = sph.UnitVector3d(1, dy, -dz/2)
+        v0 = sph.UnitVector3d(1, 0, -dz / 2)
+        v1 = sph.UnitVector3d(1, 0, dz / 2)
+        v2 = sph.UnitVector3d(1, dy, dz / 2)
+        v3 = sph.UnitVector3d(1, dy, -dz / 2)
         poly = sph.ConvexPolygon([v0, v1, v2, v3])
         area = geom.poly_area(poly)
-        self.assertAlmostEqual(area, dz*dy)
+        self.assertAlmostEqual(area, dz * dy)
 
 
 #

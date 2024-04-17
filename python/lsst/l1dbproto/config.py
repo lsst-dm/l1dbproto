@@ -27,11 +27,12 @@ __all__ = ["L1dbprotoConfig"]
 import math
 
 import astropy.time
-from lsst.pex.config import Config
-from lsst.pex.config import Field, ChoiceField
+from lsst.pex.config import ChoiceField, Config, Field
 
 
 class L1dbprotoConfig(Config):
+    """Configuration parameters for ap_proto."""
+
     FOV_deg = Field[float](doc="FOV in degrees", default=3.5)
     transient_per_visit = Field[int](doc="average number of transients per visit", default=100)
     false_per_visit = Field[int](doc="average number of false positives per visit", default=5050)
