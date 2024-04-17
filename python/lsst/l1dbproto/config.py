@@ -27,67 +27,65 @@ __all__ = ["L1dbprotoConfig"]
 import math
 
 import astropy.time
-from lsst.pex.config import Config
-from lsst.pex.config import Field, ChoiceField
+from lsst.pex.config import ChoiceField, Config, Field
 
 
 class L1dbprotoConfig(Config):
+    """Configuration parameters for ap_proto."""
 
-    FOV_deg = Field(dtype=float,
-                    doc="FOV in degrees",
-                    default=3.5)
-    transient_per_visit = Field(dtype=int,
-                                doc="average number of transients per visit",
-                                default=100)
-    false_per_visit = Field(dtype=int,
-                            doc="average number of false positives per visit",
-                            default=5050)
-    divide = Field(dtype=int,
-                   doc=("Divide FOV into NUM*NUM tiles for parallel processing. "
-                        "If negative means camera style tiling with 5x5 rafts "
-                        "each subdivided in both directions into negated value "
-                        "of this parameter."),
-                   default=1)
-    interval = Field(dtype=int,
-                     doc='Interval between visits in seconds, def: 45',
-                     default=45)
-    forced_cutoff_days = Field(dtype=int,
-                               doc=("Period after which we stop forced photometry "
-                                    "if there was no observed source, def: 30"),
-                               default=30)
-    start_time = Field(dtype=str,
-                       default="2020-01-01T20:00:00",
-                       doc=('Starting time, format: YYYY-MM-DDThh:mm:ss'
-                            '. Time is assumed to be in UTC time zone. Used only at'
-                            ' first invocation to initialize database.'))
-    start_visit_id = Field(dtype=int,
-                           default=1,
-                           doc='Starting visit ID. Used only at first invocation'
-                           ' to intialize database.')
-    sources_file = Field(dtype=str,
-                         doc='Name of input file with sources (numpy data)',
-                         default="var_sources.npy")
-    mp_mode = ChoiceField(dtype=str,
-                          allowed=dict(fork="Forking mode", mpi="MPI mode"),
-                          doc='multiprocessing mode, only for `divide > 1` or `divide < 0',
-                          default="fork")
-    src_read_duty_cycle = Field(
-        dtype=float,
-        doc=("Fraction of visits for which (forced) sources are read from database."),
-        default=1.
-    )
-    src_read_period = Field(
-        dtype=int,
-        doc=("Period for repating read/no-read cycles for (forced) sources."),
-        default=1000
-    )
-    fill_empty_fields = Field(
-        dtype=bool,
-        doc="If True then store random values for fields not explicitly filled.",
-        default=False)
-    insert_id_keep_days = Field[int](
+    FOV_deg = Field[float](doc="FOV in degrees", default=3.5)
+    transient_per_visit = Field[int](doc="average number of transients per visit", default=100)
+    false_per_visit = Field[int](doc="average number of false positives per visit", default=5050)
+    divide = Field[int](
         doc=(
-            "Number of days of insert_id history to keep during daily cleanups. "
+            "Divide FOV into NUM*NUM tiles for parallel processing. "
+            "If negative means camera style tiling with 5x5 rafts "
+            "each subdivided in both directions into negated value "
+            "of this parameter."
+        ),
+        default=1,
+    )
+    interval = Field[int](doc="Interval between visits in seconds, def: 45", default=45)
+    forced_cutoff_days = Field[int](
+        doc=("Period after which we stop forced photometry " "if there was no observed source, def: 30"),
+        default=30,
+    )
+    start_time = Field[str](
+        default="2020-01-01T20:00:00",
+        doc=(
+            "Starting time, format: YYYY-MM-DDThh:mm:ss"
+            ". Time is assumed to be in UTC time zone. Used only at"
+            " first invocation to initialize database."
+        ),
+    )
+    start_visit_id = Field[int](
+        default=1,
+        doc="Starting visit ID. Used only at first invocation" " to intialize database.",
+    )
+    sources_file = Field[str](
+        doc="Name of input file with sources (numpy data)",
+        default="var_sources.npy",
+    )
+    mp_mode = ChoiceField[str](
+        allowed=dict(fork="Forking mode", mpi="MPI mode"),
+        doc="multiprocessing mode, only for `divide > 1` or `divide < 0",
+        default="fork",
+    )
+    src_read_duty_cycle = Field[float](
+        doc=("Fraction of visits for which (forced) sources are read from database."),
+        default=1.0,
+    )
+    src_read_period = Field[int](
+        doc=("Period for repeating read/no-read cycles for (forced) sources."),
+        default=1000,
+    )
+    fill_empty_fields = Field[bool](
+        doc="If True then store random values for fields not explicitly filled.",
+        default=False,
+    )
+    replica_chunk_keep_days = Field[int](
+        doc=(
+            "Number of days of replica chunk history to keep during daily cleanups. "
             "Negative number disables cleanups."
         ),
         default=-1,
@@ -106,6 +104,6 @@ class L1dbprotoConfig(Config):
 
     @property
     def interval_astropy(self) -> astropy.time.TimeDelta:
-        """interval as astropy TimeDelta."""
+        """Interval as astropy TimeDelta."""
         delta = astropy.time.TimeDelta(self.interval, format="sec", scale="tai")
         return delta

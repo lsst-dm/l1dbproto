@@ -24,22 +24,20 @@
 """Script to read ap_proto logs and produce CSV file.
 """
 
-from argparse import ArgumentParser
-from collections import defaultdict
-from datetime import datetime, timezone
 import gzip
 import logging
 import re
 import sys
 import time
-
+from argparse import ArgumentParser
+from collections import defaultdict
+from datetime import datetime, timezone
 
 _tz = None
 
 
 def _configLogger(verbosity):
-    """ configure logging based on verbosity level """
-
+    """Configure logging based on verbosity level"""
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
@@ -47,8 +45,7 @@ def _configLogger(verbosity):
 
 
 class _Stat:
-
-    def __init__(self, cnt=0, sum=0.):
+    def __init__(self, cnt=0, sum=0.0):
         self._cnt = cnt
         self._sum = sum
 
@@ -96,11 +93,12 @@ _timers_cpu = defaultdict(lambda: _Stat())
 
 
 def _sort_lines(iterable, num=100):
-    """sort input file according to timestamps.
+    """Sort input file according to timestamps.
 
     Log files are written from multiple process and sometimes ordering can
     be violated. This method sorts inputs according to timestamps.
     """
+
     def _sort_key(line):
         # extract timestamp
         return line.split()[:2]
@@ -120,10 +118,10 @@ def _timestamp(line):
 
     Timestamp looks like "2020-02-10 18:40:00,148".
     """
-    ts = ' '.join(line.split()[:2]).replace(',', '.')
+    ts = " ".join(line.split()[:2]).replace(",", ".")
     dt = datetime.fromisoformat(ts)
     dt = dt.replace(tzinfo=_tz)
-    return int(round(dt.timestamp() * 1e3))*1000000
+    return int(round(dt.timestamp() * 1e3)) * 1000000
 
 
 _re_tile1 = re.compile(r" tile=(\d+)x(\d+) ")
@@ -135,12 +133,11 @@ def _tile(line):
     m = _re_tile1.search(line) or _re_tile2.search(line)
     if m:
         return "{}x{}".format(*m.group(1, 2))
-    return 'fov'
+    return "fov"
 
 
 def _new_visit(line):
-    """Initialize data structures for new visit.
-    """
+    """Initialize data structures for new visit."""
     _context.clear()
     _counters.clear()
     _timers_real.clear()
@@ -148,7 +145,7 @@ def _new_visit(line):
     words = line.split()
     visit = int(words[-4])
     ts = _timestamp(line)
-    _context['visit'] = visit
+    _context["visit"] = visit
     # print(f"visit,tile='fov' start={visit} {ts}")
     print(f"visit start={visit} {ts}")
 
@@ -174,12 +171,11 @@ def _parse_counts(line):
 
 
 def _parse_timer(line):
-    """Parse timer info
-    """
-    p = line.rfind('\x1b')
+    """Parse timer info"""
+    p = line.rfind("\x1b")
     if p > 0:
         line = line[:p]
-    words = line.replace('=', ' ').split()
+    words = line.replace("=", " ").split()
     real = float(words[-5])
     cpu = float(words[-3]) + float(words[-1])
     return real, cpu
@@ -223,7 +219,6 @@ def _parse_timers(line):
     if timer:
         # ts = _timestamp(line)
         # tile = _tile(line)
-        # print(f"timer,tile='{tile}',timer={timer} real={real},cpu={cpu} {ts}")
         _timers_real[timer] += real
         _timers_cpu[timer] += cpu
 
@@ -314,42 +309,38 @@ def _end_visit(line):
     Dump collected information
     """
     ts = _timestamp(line)
-    visit = _context['visit']
-    _context['visit'] = None
+    visit = _context["visit"]
+    _context["visit"] = None
     real, cpu = _parse_timer(line)
     # print(f"visit,tile='fov' end={visit},real={real},cpu={cpu} {ts}")
     print(f"visit end={visit},real={real},cpu={cpu} {ts}")
     for key, stat in _counters.items():
-        # print(f"counter,tile='fov',counter={key} sum={stat.sum},avg={stat.average} {ts}")
         print(f"counter,counter={key} sum={stat.sum},avg={stat.average} {ts}")
     for key, stat in _timers_real.items():
-        # print(f"timer,tile='fov',timer={key} sum={stat.sum},avg={stat.average} {ts}")
         print(f"timing,timer={key},kind=real sum={stat.sum},avg={stat.average} {ts}")
     for key, stat in _timers_cpu.items():
-        # print(f"timer,tile='fov',timer={key} sum={stat.sum},avg={stat.average} {ts}")
         print(f"timing,timer={key},kind=cpu sum={stat.sum},avg={stat.average} {ts}")
     sys.stdout.flush()
 
 
 # Map line sibstring to method
-_dispatch = [(re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
-             (re.compile(r"Start processing visit \d+ tile"), _new_tile_visit),
-             (re.compile(" row count: "), _parse_counts),
-             (re.compile(": real="), _parse_timers),
-             (re.compile(": #partitions: "), _parse_queries_count),
-             (re.compile(": #queries: "), _parse_queries_count),
-             (re.compile(" database found "), _parse_select_count),
-             (re.compile(" after filtering "), _parse_select_count),
-             (re.compile(" will store "), _parse_store_count),
-             (re.compile(r"Finished processing visit \d+ tile"), _end_tile_visit),  # must be last
-             (re.compile(r"Finished processing visit \d+, (?!tile)"), _end_visit),  # must be last
-             ]
+_dispatch = [
+    (re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
+    (re.compile(r"Start processing visit \d+ tile"), _new_tile_visit),
+    (re.compile(" row count: "), _parse_counts),
+    (re.compile(": real="), _parse_timers),
+    (re.compile(": #partitions: "), _parse_queries_count),
+    (re.compile(": #queries: "), _parse_queries_count),
+    (re.compile(" database found "), _parse_select_count),
+    (re.compile(" after filtering "), _parse_select_count),
+    (re.compile(" will store "), _parse_store_count),
+    (re.compile(r"Finished processing visit \d+ tile"), _end_tile_visit),  # must be last
+    (re.compile(r"Finished processing visit \d+, (?!tile)"), _end_visit),  # must be last
+]
 
 
 def _follow(input, stop_timeout_sec=60):
-    """Implement reading from a file that is being written into (tail -F).
-    """
-
+    """Implement reading from a file that is being written into (tail -F)."""
     stop_re = re.compile("Stopping MPI tile processes")
 
     last_read = time.time()
@@ -357,7 +348,6 @@ def _follow(input, stop_timeout_sec=60):
     block_size = 64 * 1024
     stop = False
     while True:
-
         if "\n" not in buffer:
             if stop:
                 return
@@ -377,8 +367,8 @@ def _follow(input, stop_timeout_sec=60):
 
         idx = buffer.find("\n")
         if idx >= 0:
-            line = buffer[:idx+1]
-            buffer = buffer[idx+1:]
+            line = buffer[: idx + 1]
+            buffer = buffer[idx + 1 :]
 
             if stop_re.match(line):
                 # stop after reading remaing lines
@@ -388,20 +378,29 @@ def _follow(input, stop_timeout_sec=60):
 
 
 def main():
-
-    descr = 'Read ap_proto log and extract few numbers into csv.'
+    """PArse logs and generate influxdb line format."""
+    descr = "Read ap_proto log and extract few numbers into csv."
     parser = ArgumentParser(description=descr)
-    parser.add_argument('-v', '--verbose', action='count', default=0,
-                        help='More verbose output, can use several times.')
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0, help="More verbose output, can use several times."
+    )
     parser.add_argument("-D", "--database", default="ap_proto", help="Name of the InfluxDB database.")
-    parser.add_argument("-u", "--utc", default=False, action="store_true",
-                        help="Use UTC for timestamps in the log file.")
-    parser.add_argument("-F", "--follow", default=False, action="store_true",
-                        help="Continue reading as file grows.")
-    parser.add_argument("--follow-timeout", default=60, type=int, metavar="SECONDS",
-                        help="Max number of seconds to wait for file to grow, def: %(default)s.")
-    parser.add_argument('file', nargs='+',
-                        help='Name of input log file, optionally compressed, use "-" for stdin')
+    parser.add_argument(
+        "-u", "--utc", default=False, action="store_true", help="Use UTC for timestamps in the log file."
+    )
+    parser.add_argument(
+        "-F", "--follow", default=False, action="store_true", help="Continue reading as file grows."
+    )
+    parser.add_argument(
+        "--follow-timeout",
+        default=60,
+        type=int,
+        metavar="SECONDS",
+        help="Max number of seconds to wait for file to grow, def: %(default)s.",
+    )
+    parser.add_argument(
+        "file", nargs="+", help='Name of input log file, optionally compressed, use "-" for stdin'
+    )
     args = parser.parse_args()
 
     # configure logging
@@ -418,7 +417,7 @@ def main():
 
     # open each file in order
     for input in args.file:
-        if input == '-':
+        if input == "-":
             input = sys.stdin
         else:
             f = gzip.open(input, "rt")
