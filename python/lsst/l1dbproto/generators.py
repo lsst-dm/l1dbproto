@@ -32,18 +32,20 @@ from .geom import rotation_matrix
 
 def rand_sphere_xyz(count: int = 1, hemi: int = 0, seed: Optional[int] = None
                     ) -> numpy.ndarray:
-    """
-    Generates random points on unit sphere.
+    """Generate random points on unit sphere.
 
     Returns array of random spherical positions, array dimensions
     is (count, 3), it is count * (x, y, z).
 
-    @param count:   number of returned point, major dimension of returned array
-    @param hemi:    if 0 then both hemispheres are filled, if positive then
-                    only nothern hemisphere is filled, if negative then only
-                    southern hemisphere is filled.
+    Parameters
+    ----------
+    count : int
+        number of returned point, major dimension of returned array
+    hemi : int
+        if 0 then both hemispheres are filled, if positive then only nothern
+        hemisphere is filled, if negative then only southern hemisphere is
+        filled.
     """
-
     rs = numpy.random.RandomState(seed=seed)
 
     r = rs.normal(size=(count, 3))
@@ -59,13 +61,18 @@ def rand_sphere_xyz(count: int = 1, hemi: int = 0, seed: Optional[int] = None
 
 def rand_cone_xyz(direction: numpy.ndarray, open_angle: float, n: int = 1, seed: Optional[int] = None
                   ) -> numpy.ndarray:
-    """
-    Generate random vectors in a cone around given vector.
+    """Generate random vectors in a cone around given vector.
 
-    @param direction: XYZ vector of the cone axis, must be numpy array
-    @param open_angle: opening angle (full) of a cone, radians
-    @param n:         number of generated vectors
-    @param seed:      seed for generator
+    Parameters
+    ----------
+    direction
+        XYZ vector of the cone axis, must be numpy array
+    open_angle : float
+        opening angle (full) of a cone, radians
+    n : int
+        number of generated vectors
+    seed : `int`, optional
+        seed for generator
     """
     rs = numpy.random.RandomState(seed=seed)
     xy = rs.normal(size=(n, 2))
@@ -73,10 +80,10 @@ def rand_cone_xyz(direction: numpy.ndarray, open_angle: float, n: int = 1, seed:
 
     z0 = math.cos(open_angle / 2)
     zs = rs.uniform(z0, 1., size=n)
-    rs = numpy.sqrt(1.0 - zs * zs)
+    sqr = numpy.sqrt(1.0 - zs * zs)
 
     res = numpy.empty((n, 3), 'f8')
-    res[:, :2] = rs[:, numpy.newaxis] * xy
+    res[:, :2] = sqr[:, numpy.newaxis] * xy
     res[:, 2] = zs
 
     # rotate

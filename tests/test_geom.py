@@ -41,8 +41,7 @@ class TestGeom(unittest.TestCase):
         pass
 
     def test_rot_matrix(self) -> None:
-        """ Testing rotation matrix method """
-
+        """Testing rotation matrix method"""
         a = np.array([0., 0., 1.])
         b = np.array([0., 0., 1.])
         R = geom.rotation_matrix(a, b)
@@ -77,7 +76,7 @@ class TestGeom(unittest.TestCase):
         tiles = geom.make_square_tiles(3.5 * math.pi / 180, 15, 15, exclude_disjoint=True)
         self.assertEqual(len(tiles), 15*15 - 4*6)
 
-    def test_make_camera_tiles(self):
+    def test_make_camera_tiles(self) -> None:
 
         tiles = geom.make_camera_tiles(3.5 * math.pi / 180, 2)
         self.assertEqual(len(tiles), 84)
@@ -91,7 +90,7 @@ class TestGeom(unittest.TestCase):
             self.assertFalse(ix >= 12 and iy < 3)
             self.assertFalse(ix >= 12 and iy >= 12)
 
-    def test_make_tiles(self):
+    def test_make_tiles(self) -> None:
 
         tiles = geom.make_tiles(3.5 * math.pi / 180, 2)
         self.assertEqual(len(tiles), 4)
@@ -99,7 +98,9 @@ class TestGeom(unittest.TestCase):
         tiles = geom.make_tiles(3.5 * math.pi / 180, -2)
         self.assertEqual(len(tiles), 84)
 
-    def _tri_test_one(self, v0, v1, v2, area):
+    def _tri_test_one(
+        self, v0: sph.UnitVector3d, v1: sph.UnitVector3d, v2: sph.UnitVector3d, area: float
+    ) -> None:
         """Test for triangle area with all permutations of vertices.
         """
         triangles = [
@@ -111,7 +112,7 @@ class TestGeom(unittest.TestCase):
             a = geom.triangle_area(*triangle)
             self.assertAlmostEqual(a, area)
 
-    def test_area_tri(self):
+    def test_area_tri(self) -> None:
 
         sphere_area = 4 * math.pi
 

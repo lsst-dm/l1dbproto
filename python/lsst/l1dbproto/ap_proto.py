@@ -40,12 +40,12 @@ from typing import Any, cast, Iterator, List, Optional, Tuple
 
 from mpi4py import MPI
 import astropy.time
-import felis
+import felis.datamodel
 import numpy
 import numpy.random
 from lsst.geom import SpherePoint
 from . import L1dbprotoConfig, DIA, generators, geom
-from lsst.dax.apdb import Apdb, timer, ApdbTables
+from lsst.dax.apdb import Apdb, ApdbTables, ApdbReplica, timer
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 from lsst.utils.iteration import chunk_iterable
 from .visit_info import VisitInfoStore
@@ -191,7 +191,6 @@ class APProto(object):
 
     def run(self) -> Optional[int]:
         """Run whole shebang."""
-
         # load configurations
         if self.args.app_config:
             self.config.load(self.args.app_config)
@@ -291,7 +290,7 @@ class APProto(object):
                         midday.isot,
                     )
                     db.dailyJob()
-                    self._daily_insert_id_cleanup(db, midday)
+                    self._daily_insert_id_cleanup(self.args.config, midday)
                     _LOG.info(
                         COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET
                     )
@@ -578,7 +577,6 @@ class APProto(object):
         tile : `tuple`
             tile position (x, y)
         """
-
         name = ""
         if tile is not None:
             name = "tile={}x{} ".format(*tile)
@@ -660,7 +658,6 @@ class APProto(object):
         Filtered `pandas.DataFrame` containing only records contained
         in the region.
         """
-
         if latest_objects.empty:
             return latest_objects
 
@@ -752,7 +749,6 @@ class APProto(object):
         visit_id : `int`
             Visit ID.
         """
-
         midpointMjdTai = visit_time.tai.mjd
 
         if objects.empty:
@@ -906,27 +902,27 @@ class APProto(object):
             if colDef.name not in catalog.columns:
                 # need to make a new column
                 data: Any
-                if colDef.datatype is felis.types.Float:
+                if colDef.datatype is felis.datamodel.DataType.float:
                     data = rng.random(count, dtype=numpy.float32)
-                elif colDef.datatype is felis.types.Double:
+                elif colDef.datatype is felis.datamodel.DataType.double:
                     data = rng.random(count, dtype=numpy.float64)
-                elif colDef.datatype is felis.types.Int:
+                elif colDef.datatype is felis.datamodel.DataType.int:
                     data = rng.integers(0, 1000, count, dtype=numpy.int32)
-                elif colDef.datatype is felis.types.Long:
+                elif colDef.datatype is felis.datamodel.DataType.long:
                     data = rng.integers(0, 1000, count, dtype=numpy.int64)
-                elif colDef.datatype is felis.types.Short:
+                elif colDef.datatype is felis.datamodel.DataType.short:
                     data = rng.integers(0, 1000, count, dtype=numpy.int16)
-                elif colDef.datatype is felis.types.Byte:
+                elif colDef.datatype is felis.datamodel.DataType.byte:
                     data = rng.integers(0, 255, count, dtype=numpy.int8)
-                elif colDef.datatype is felis.types.Boolean:
+                elif colDef.datatype is felis.datamodel.DataType.boolean:
                     data = rng.integers(0, 1, count, dtype=numpy.int8)
-                elif colDef.datatype is felis.types.Binary:
+                elif colDef.datatype is felis.datamodel.DataType.binary:
                     data = [rng.bytes(colDef.length or 3) for i in range(count)]
                 elif colDef.datatype in (
-                    felis.types.Char,
-                    felis.types.String,
-                    felis.types.Unicode,
-                    felis.types.Text,
+                    felis.datamodel.DataType.char,
+                    felis.datamodel.DataType.string,
+                    felis.datamodel.DataType.unicode,
+                    felis.datamodel.DataType.text,
                 ):
                     chars = string.ascii_letters + string.digits
                     random_strings = []
@@ -936,7 +932,7 @@ class APProto(object):
                         )
                         random_strings.append("".join([chars[idx] for idx in indices]))
                     data = random_strings
-                elif colDef.datatype is felis.types.Timestamp:
+                elif colDef.datatype is felis.datamodel.DataType.timestamp:
                     data = rng.integers(
                         1500000000, 1600000000, count, dtype=numpy.int64
                     )
@@ -949,36 +945,37 @@ class APProto(object):
             catalog = pandas.concat([catalog] + columns, axis="columns")
         return catalog
 
-    def _daily_insert_id_cleanup(self, db: Apdb, visit_time: astropy.time.Time) -> None:
+    def _daily_insert_id_cleanup(self, config_uri: str, visit_time: astropy.time.Time) -> None:
         """Remove old data from all InsertId tables.
 
         Parameters
         ----------
-        db : `Apdb`
-            Database instance.
+        config_uri : `str`
+            Path to config file for Apdb.
         visit_time : `astropy.time.Time`
             Time of next visit.
         """
-        cleanup_days = self.config.insert_id_keep_days
+        cleanup_days = self.config.replica_chunk_keep_days
         if cleanup_days < 0:
             # no cleanup
             return
 
-        insert_ids = db.getInsertIds()
-        if not insert_ids:
+        replica = ApdbReplica.from_uri(config_uri)
+        chunks = replica.getReplicaChunks()
+        if not chunks:
             return
 
         # Find latest InsertId. InsertIds should be ordered, but it's not
         # guaranteed.
-        latest_time = max(iid.insert_time for iid in insert_ids)
+        latest_time = max(chunk.last_update_time for chunk in chunks)
         drop_time = latest_time - astropy.time.TimeDelta(
-            self.config.insert_id_keep_days, format="jd"
+            self.config.replica_chunk_keep_days, format="jd"
         )
-        to_remove = [iid for iid in insert_ids if iid.insert_time < drop_time]
-        _LOG.info(COLOR_YELLOW + "Will remove %d inserts" + COLOR_RESET, len(to_remove))
-        for chunk in chunk_iterable(to_remove, 10_000):
+        chunks_to_remove = [chunk for chunk in chunks if chunk.last_update_time < drop_time]
+        _LOG.info(COLOR_YELLOW + "Will remove %d inserts" + COLOR_RESET, len(chunks_to_remove))
+        for to_remove in chunk_iterable(chunks_to_remove, 10_000):
             try:
-                db.deleteInsertIds(to_remove)
+                replica.deleteReplicaChunks(to_remove)
             except Exception as exc:
                 _LOG.error(
                     COLOR_RED
