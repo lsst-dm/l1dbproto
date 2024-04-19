@@ -13,7 +13,7 @@ services:
 
     volumes:
       - type: bind
-        source: /data
+        source: /zfspool/cassandra
         target: /data
       - type: bind
         # entrypoint updates cassandra.yaml so it cannot be read-only
