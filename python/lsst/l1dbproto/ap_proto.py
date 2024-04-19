@@ -42,7 +42,7 @@ import felis.datamodel
 import numpy
 import numpy.random
 import pandas
-from lsst.dax.apdb import Apdb, ApdbReplica, ApdbTables, timer
+from lsst.dax.apdb import Apdb, ApdbReplica, ApdbTables, monitor, timer
 from lsst.geom import SpherePoint
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 from lsst.utils.iteration import chunk_iterable
@@ -61,6 +61,8 @@ COLOR_RESET = "\033[0m"
 
 
 _LOG = logging.getLogger("ap_proto")
+
+_MON = monitor.MonAgent("ap_proto")
 
 
 def _configLogger(verbosity: int) -> None:
@@ -197,6 +199,13 @@ class APProto(object):
             self.config.saveToStream(sys.stdout)
             return 0
 
+        if self.config.mon_logger:
+            mon_handler = monitor.LoggingMonHandler(self.config.mon_logger)
+            monitor.MonService().add_handler(mon_handler)
+        if self.config.mon_rules:
+            rules = self.config.mon_rules.split(",")
+            monitor.MonService().set_filters(rules)
+
         # instantiate db interface
         db = Apdb.from_uri(self.args.config)
 
@@ -293,7 +302,7 @@ class APProto(object):
                 visit_id,
                 visit_time.isot,
             )
-            loop_timer = timer.Timer().start()
+            loop_timer = timer.Timer("total_visit_time").start()
 
             with timer.Timer("DIA"):
                 # point telescope in random southern direction
@@ -341,8 +350,9 @@ class APProto(object):
 
             if self.config.divide == 1:
                 # do it in-process
-                with timer.Timer("VisitProcessing"):
-                    self.visit(db, visit_id, visit_time, region, sources, indices)
+                with _MON.context_tags({"visit": visit_id}):
+                    with timer.Timer("VisitProcessing", _MON, _LOG):
+                        self.visit(db, visit_id, visit_time, region, sources, indices)
 
             else:
                 if self.config.mp_mode == "fork":
@@ -435,6 +445,7 @@ class APProto(object):
                 visit_id,
                 loop_timer,
             )
+            _MON.add_record("total_visit_time", values=loop_timer.as_dict(), tags={"visit": visit_id})
 
         # stop MPI slaves
         if num_tiles > 1 and self.config.mp_mode == "mpi":
@@ -502,17 +513,22 @@ class APProto(object):
                 tile,
                 visit_time,
             )
-            loop_timer = timer.Timer().start()
-            try:
-                self.visit(db, visit_id, visit_time, region, sources, indices, tile)
-            except Exception as exc:
-                _LOG.error("Exception in visit processing: %s", exc, exc_info=True)
-            _LOG.info(
-                COLOR_CYAN + "--- Finished processing visit %s tile %s, time: %s" + COLOR_RESET,
-                visit_id,
-                tile,
-                loop_timer,
-            )
+            tags = {"visit": visit_id, "rank": MPI.COMM_WORLD.Get_rank()}
+            if tile is not None:
+                tags["tile"] = "{}x{}".format(*tile)
+            with _MON.context_tags(tags):
+                with timer.Timer("tile_visit_time", _MON) as loop_timer:
+                    try:
+                        self.visit(db, visit_id, visit_time, region, sources, indices, tile)
+                    except Exception as exc:
+                        _LOG.error("Exception in visit processing: %s", exc, exc_info=True)
+                    _LOG.info(
+                        COLOR_CYAN + "--- Finished processing visit %s tile %s, time: %s" + COLOR_RESET,
+                        visit_id,
+                        tile,
+                        loop_timer,
+                    )
+
             # TODO: send something more useful?
             data = comm.gather(True, root=0)
             _LOG.debug("Tile %s gather returned %r", tile, data)
@@ -568,15 +584,19 @@ class APProto(object):
             if not region.contains(UnitVector3d(xyz[0], xyz[1], xyz[2])):
                 indices[i] = _OUTSIDER
 
+        counts: dict[str, int] = {}
+
         with timer.Timer(name + "Objects-read"):
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
             latest_objects = db.getDiaObjects(region)
             _LOG.info(name + "database found %s objects", _nrows(latest_objects))
+            counts["objects"] = _nrows(latest_objects)
 
             # filter database objects to a mask
             latest_objects = self._filterDiaObjects(latest_objects, region)
             _LOG.info(name + "after filtering %s objects", _nrows(latest_objects))
+            counts["objects_filtered"] = _nrows(latest_objects)
 
         with timer.Timer(name + "S2O-matching"):
             # create all new DiaObjects
@@ -599,19 +619,29 @@ class APProto(object):
 
                 read_srcs = db.getDiaSources(region, latest_objects_ids, visit_time)
                 _LOG.info(name + "database found %s sources", _nrows(read_srcs))
+                counts["sources"] = _nrows(read_srcs)
 
                 read_srcs = db.getDiaForcedSources(region, latest_objects_ids, visit_time)
                 _LOG.info(name + "database found %s forced sources", _nrows(read_srcs))
+                counts["forcedsources"] = _nrows(read_srcs)
         else:
             _LOG.info("skipping reading of sources for this visit")
 
+        _MON.add_record("read_counts", values=counts)
+
         if not self.args.no_update:
-            with timer.Timer(name + "L1-store"):
+            with timer.Timer(f"{name}_store_time", _MON, _LOG):
                 # store new versions of objects
                 _LOG.info(name + "will store %d Objects", len(objects))
                 _LOG.info(name + "will store %d Sources", len(srcs))
                 _LOG.info(name + "will store %d ForcedSources", len(fsrcs))
                 db.store(visit_time, objects, srcs, fsrcs)
+                counts = {
+                    "objects": len(objects),
+                    "sources": len(srcs),
+                    "forcedsources": len(fsrcs),
+                }
+                _MON.add_record("store_counts", values=counts)
 
     def _filterDiaObjects(self, latest_objects: pandas.DataFrame, region: Region) -> pandas.DataFrame:
         """Filter out objects from a catalog which are outside region.

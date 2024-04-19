@@ -90,6 +90,11 @@ class L1dbprotoConfig(Config):
         ),
         default=-1,
     )
+    mon_logger = Field[str](
+        doc="Name of the logger to use for monitoring output, if not specified no metrics will be printed.",
+        default=None,
+    )
+    mon_rules = Field[str](doc="Comma-separated list of monitoring filter rules.", default="")
 
     @property
     def FOV_rad(self) -> float:
