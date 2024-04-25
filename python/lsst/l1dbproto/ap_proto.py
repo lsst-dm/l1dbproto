@@ -283,169 +283,171 @@ class APProto(object):
         # loop over visits
         visitTimes = _visitTimes(start_time, self.config.interval_astropy, self.args.num_visits)
         for visit_id, visit_time in enumerate(visitTimes, start_visit_id):
-            if prev_visit_time is not None:
-                delta_to_prev = visit_time - prev_visit_time
-                # If delta to previous is much longer than interval means we
-                # just skipped day time.
-                if delta_to_prev > self.config.interval_astropy * 100:
-                    midday = prev_visit_time + delta_to_prev / 2
-                    _LOG.info(
-                        COLOR_YELLOW + "+++ Start daily activities at %s" + COLOR_RESET,
-                        midday.isot,
-                    )
-                    db.dailyJob()
-                    self._daily_insert_id_cleanup(self.args.config, midday)
-                    _LOG.info(COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET)
+            with _MON.context_tags({"visit": visit_id}):
+                if prev_visit_time is not None:
+                    delta_to_prev = visit_time - prev_visit_time
+                    # If delta to previous is much longer than interval means we
+                    # just skipped day time.
+                    if delta_to_prev > self.config.interval_astropy * 100:
+                        midday = prev_visit_time + delta_to_prev / 2
+                        _LOG.info(
+                            COLOR_YELLOW + "+++ Start daily activities at %s" + COLOR_RESET,
+                            midday.isot,
+                        )
+                        db.dailyJob()
+                        self._daily_insert_id_cleanup(self.args.config, midday)
+                        _LOG.info(COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET)
 
-            _LOG.info(
-                COLOR_GREEN + "+++ Start processing visit %s at %s" + COLOR_RESET,
-                visit_id,
-                visit_time.isot,
-            )
-            loop_timer = timer.Timer("total_visit_time").start()
-
-            with timer.Timer("DIA"):
-                # point telescope in random southern direction
-                pointing_xyz = generators.rand_sphere_xyz(1, -1)[0]
-                pointing_v = UnitVector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
-                ra = LonLat.longitudeOf(pointing_v).asDegrees()
-                dec = LonLat.latitudeOf(pointing_v).asDegrees()
-
-                # sphgeom.Circle opening angle is actually a half of opening
-                # angle
-                region = Circle(pointing_v, Angle(self.config.FOV_rad / 2))
-
-                _LOG.info("Pointing ra, dec = %s, %s; xyz = %s", ra, dec, pointing_xyz)
-
-                # Simulating difference image analysis
-                dia = DIA.DIA(
-                    pointing_xyz,
-                    self.config.FOV_rad,
-                    var_sources,
-                    self.config.false_per_visit + self.config.transient_per_visit,
+                _LOG.info(
+                    COLOR_GREEN + "+++ Start processing visit %s at %s" + COLOR_RESET,
+                    visit_id,
+                    visit_time.isot,
                 )
-                sources, indices = dia.makeSources()
-                _LOG.info("DIA generated %s sources", len(sources))
+                loop_timer = timer.Timer("total_visit_time").start()
 
-                # assign IDs to transients
-                for i in range(len(sources)):
-                    if indices[i] < 0:
-                        self.lastObjectId += 1
-                        indices[i] = self.lastObjectId
+                with timer.Timer("DIA", _LOG):
+                    # point telescope in random southern direction
+                    pointing_xyz = generators.rand_sphere_xyz(1, -1)[0]
+                    pointing_v = UnitVector3d(pointing_xyz[0], pointing_xyz[1], pointing_xyz[2])
+                    ra = LonLat.longitudeOf(pointing_v).asDegrees()
+                    dec = LonLat.latitudeOf(pointing_v).asDegrees()
 
-            # print current database row counts, this takes long time
-            # so only do it once in a while
-            modu = 200 if visit_id <= 10000 else 1000
-            if visit_id % modu == 0:
-                if hasattr(db, "tableRowCount"):
-                    counts = db.tableRowCount()
-                    for tbl, count in sorted(counts.items()):
-                        _LOG.info("%s row count: %s", tbl, count)
+                    # sphgeom.Circle opening angle is actually a half of opening
+                    # angle
+                    region = Circle(pointing_v, Angle(self.config.FOV_rad / 2))
 
-            # numpy seems to do some multi-threaded stuff which "leaks" CPU
-            # cycles to the code below and it gets counted as resource usage
-            # in timers, add a short delay here so that threads finish and
-            # don't influence our timers below.
-            time.sleep(0.1)
+                    _LOG.info("Pointing ra, dec = %s, %s; xyz = %s", ra, dec, pointing_xyz)
 
-            if self.config.divide == 1:
-                # do it in-process
-                with _MON.context_tags({"visit": visit_id}):
-                    with timer.Timer("VisitProcessing", _MON, _LOG):
+                    # Simulating difference image analysis
+                    dia = DIA.DIA(
+                        pointing_xyz,
+                        self.config.FOV_rad,
+                        var_sources,
+                        self.config.false_per_visit + self.config.transient_per_visit,
+                    )
+                    sources, indices = dia.makeSources()
+                    _LOG.info("DIA generated %s sources", len(sources))
+
+                    # assign IDs to transients
+                    for i in range(len(sources)):
+                        if indices[i] < 0:
+                            self.lastObjectId += 1
+                            indices[i] = self.lastObjectId
+
+                # print current database row counts, this takes long time
+                # so only do it once in a while
+                modu = 200 if visit_id <= 10000 else 1000
+                if visit_id % modu == 0:
+                    if hasattr(db, "tableRowCount"):
+                        counts = db.tableRowCount()
+                        for tbl, count in sorted(counts.items()):
+                            _LOG.info("%s row count: %s", tbl, count)
+
+                # numpy seems to do some multi-threaded stuff which "leaks" CPU
+                # cycles to the code below and it gets counted as resource usage
+                # in timers, add a short delay here so that threads finish and
+                # don't influence our timers below.
+                time.sleep(0.1)
+
+                if self.config.divide == 1:
+                    # do it in-process
+                    with timer.Timer("visit_processing_time", _MON, _LOG):
                         self.visit(db, visit_id, visit_time, region, sources, indices)
 
-            else:
-                if self.config.mp_mode == "fork":
-                    tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
+                else:
+                    if self.config.mp_mode == "fork":
+                        tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
 
-                    with timer.Timer("VisitProcessing"):
-                        # spawn subprocesses to handle individual tiles
-                        children = []
+                        with timer.Timer("visit_processing_time", _MON, _LOG):
+                            # spawn subprocesses to handle individual tiles
+                            children = []
+                            for ix, iy, region in tiles:
+                                # make sure lastSourceId is unique in in each
+                                # process
+                                self.lastSourceId += len(sources)
+                                tile = (ix, iy)
+                                tags = {"tile": f"{ix}x{iy}"}
+                                with _MON.context_tags(tags):
+
+                                    pid = os.fork()
+                                    if pid == 0:
+                                        # child
+
+                                        self.visit(
+                                            db,
+                                            visit_id,
+                                            visit_time,
+                                            region,
+                                            sources,
+                                            indices,
+                                            tile,
+                                        )
+                                        # stop here
+                                        sys.exit(0)
+
+                                    else:
+                                        _LOG.debug("Forked process %d for tile %s", pid, tile)
+                                        children.append(pid)
+
+                                # wait until all children finish
+                                for pid in children:
+                                    try:
+                                        pid, status = os.waitpid(pid, 0)
+                                        if status != 0:
+                                            _LOG.warning(
+                                                COLOR_RED + "Child process PID=%s failed: %s" + COLOR_RESET,
+                                                pid,
+                                                status,
+                                            )
+                                    except OSError as exc:
+                                        _LOG.warning(
+                                            COLOR_RED + "wait failed for PID=%s: %s" + COLOR_RESET,
+                                            pid,
+                                            exc,
+                                        )
+
+                    elif self.config.mp_mode == "mpi":
+                        tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
+                        _LOG.info("Split FOV into %d tiles for MPI", len(tiles))
+
+                        # spawn subprocesses to handle individual tiles, special
+                        # care needed for self.lastSourceId because it's
+                        # propagated back from (0, 0)
+                        lastSourceId = self.lastSourceId
+                        tile_data = []
                         for ix, iy, region in tiles:
-                            # make sure lastSourceId is unique in in each
-                            # process
-                            self.lastSourceId += len(sources)
+                            lastSourceId += len(sources)
                             tile = (ix, iy)
-
-                            pid = os.fork()
-                            if pid == 0:
-                                # child
-
-                                self.visit(
-                                    db,
+                            tile_data += [
+                                (
                                     visit_id,
                                     visit_time,
                                     region,
                                     sources,
                                     indices,
                                     tile,
+                                    lastSourceId,
                                 )
-                                # stop here
-                                sys.exit(0)
+                            ]
+                            # make sure lastSourceId is unique in in each process
 
-                            else:
-                                _LOG.debug("Forked process %d for tile %s", pid, tile)
-                                children.append(pid)
+                        with timer.Timer("visit_processing_time", _MON, _LOG):
+                            _LOG.info("Scatter sources to %d tile processes", len(tile_data))
+                            self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data)
+                        self.lastSourceId = lastSourceId
 
-                        # wait until all children finish
-                        for pid in children:
-                            try:
-                                pid, status = os.waitpid(pid, 0)
-                                if status != 0:
-                                    _LOG.warning(
-                                        COLOR_RED + "Child process PID=%s failed: %s" + COLOR_RESET,
-                                        pid,
-                                        status,
-                                    )
-                            except OSError as exc:
-                                _LOG.warning(
-                                    COLOR_RED + "wait failed for PID=%s: %s" + COLOR_RESET,
-                                    pid,
-                                    exc,
-                                )
+                if not self.args.no_update:
+                    # store last visit info
+                    visitInfoStore.saveVisit(visit_id, visit_time, self.lastObjectId, self.lastSourceId)
 
-                elif self.config.mp_mode == "mpi":
-                    tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
-                    _LOG.info("Split FOV into %d tiles for MPI", len(tiles))
+                prev_visit_time = visit_time
 
-                    # spawn subprocesses to handle individual tiles, special
-                    # care needed for self.lastSourceId because it's
-                    # propagated back from (0, 0)
-                    lastSourceId = self.lastSourceId
-                    tile_data = []
-                    for ix, iy, region in tiles:
-                        lastSourceId += len(sources)
-                        tile = (ix, iy)
-                        tile_data += [
-                            (
-                                visit_id,
-                                visit_time,
-                                region,
-                                sources,
-                                indices,
-                                tile,
-                                lastSourceId,
-                            )
-                        ]
-                        # make sure lastSourceId is unique in in each process
-
-                    with timer.Timer("VisitProcessing"):
-                        _LOG.info("Scatter sources to %d tile processes", len(tile_data))
-                        self.run_mpi_tile(db, MPI.COMM_WORLD, tile_data)
-                    self.lastSourceId = lastSourceId
-
-            if not self.args.no_update:
-                # store last visit info
-                visitInfoStore.saveVisit(visit_id, visit_time, self.lastObjectId, self.lastSourceId)
-
-            prev_visit_time = visit_time
-
-            _LOG.info(
-                COLOR_BLUE + "--- Finished processing visit %s, time: %s" + COLOR_RESET,
-                visit_id,
-                loop_timer,
-            )
-            _MON.add_record("total_visit_time", values=loop_timer.as_dict(), tags={"visit": visit_id})
+                _LOG.info(
+                    COLOR_BLUE + "--- Finished processing visit %s, time: %s" + COLOR_RESET,
+                    visit_id,
+                    loop_timer,
+                )
+                _MON.add_record("total_visit_time", values=loop_timer.as_dict(), tags={"visit": visit_id})
 
         # stop MPI slaves
         if num_tiles > 1 and self.config.mp_mode == "mpi":
@@ -586,7 +588,7 @@ class APProto(object):
 
         counts: dict[str, int] = {}
 
-        with timer.Timer(name + "Objects-read"):
+        with timer.Timer(name + "Objects-read", _LOG):
             # Retrieve DiaObjects (latest versions) from database for matching,
             # this will produce wider coverage so further filtering is needed
             latest_objects = db.getDiaObjects(region)
@@ -598,7 +600,7 @@ class APProto(object):
             _LOG.info(name + "after filtering %s objects", _nrows(latest_objects))
             counts["objects_filtered"] = _nrows(latest_objects)
 
-        with timer.Timer(name + "S2O-matching"):
+        with timer.Timer(name + "S2O-matching", _LOG):
             # create all new DiaObjects
             objects = self._makeDiaObjects(sources, indices, visit_time)
 
@@ -614,7 +616,7 @@ class APProto(object):
                 fsrcs = self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
 
         if do_read_src:
-            with timer.Timer(name + "Source-read"):
+            with timer.Timer(name + "Source-read", _LOG):
                 latest_objects_ids = list(latest_objects["diaObjectId"])
 
                 read_srcs = db.getDiaSources(region, latest_objects_ids, visit_time)
@@ -630,7 +632,7 @@ class APProto(object):
         _MON.add_record("read_counts", values=counts)
 
         if not self.args.no_update:
-            with timer.Timer(f"{name}_store_time", _MON, _LOG):
+            with timer.Timer(f"tile_store_time", _MON, _LOG):
                 # store new versions of objects
                 _LOG.info(name + "will store %d Objects", len(objects))
                 _LOG.info(name + "will store %d Sources", len(srcs))

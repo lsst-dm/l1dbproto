@@ -21,16 +21,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Script to read ap_proto logs and produce CSV file.
-"""
+"""Script to read ap_proto logs and produce CSV file."""
 
+import dataclasses
 import gzip
+import json
 import logging
 import re
 import sys
 import time
 from argparse import ArgumentParser
 from collections import defaultdict
+from typing import Any
 
 
 def _configLogger(verbosity):
@@ -39,6 +41,16 @@ def _configLogger(verbosity):
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
+
+
+@dataclasses.dataclass
+class _Record:
+
+    name: str
+    timestamp: float
+    tags: dict[str, str| int]
+    values: dict[str, Any]
+    source: str
 
 
 class _Stat:
@@ -73,124 +85,68 @@ class _Stat:
             return "{:.6g}".format(v)
 
 
-# dictionary with visit statistics
-_values = defaultdict(lambda: _Stat())
+
+# dictionary with visit statistics, top index is visit, second index is
+# stat name
+_visits = defaultdict(lambda: defaultdict(lambda: _Stat()))
 
 
-def _sort_lines(iterable, num=100):
-    """Sort input file according to timestamps.
+def _parse_timers(record: _Record) -> None:
+    """Parse records with timer info."""
+    table_map = {
+        "DiaObject": "obj",
+        "DiaSource": "src",
+        "DiaForcedSource": "fsrc",
+        "DiaObjectChunks": "obj_repl",
+        "DiaSourceChunks": "src_repl",
+        "DiaForcedSourceChunks": "fsrc_repl",
+        "DiaObjectLast": "obj_last",
+    }
+    metrics_map = {
+        "select_time": "select",
+        "truncate_time": "trunc",
+        "delete_time": "delete",
+        "insert_time": "insert",
+        "tile_store_time": "store",
+        "visit_processing_time": "visit_proc",
+        "tile_visit_time": "tile_visit",
+        "total_visit_time": "visit",
+    }
 
-    Log files are written from multiple process and sometimes ordering can
-    be violated. This method sorts inputs according to timestamps.
-    """
+    table_prefix = ""
+    if table_name := record.tags.get("table"):
+        if short_name := table_map.get(table_name):
+            table_prefix = f"{short_name}_"
 
-    def _sort_key(line):
-        # extract timestamp
-        return line.split()[:2]
+    if prefix := metrics_map.get(record.name):
 
-    lines = []
-    for line in iterable:
-        lines.append(line)
-        if len(lines) > num:
-            lines.sort(key=_sort_key)
-            yield lines.pop(0)
-    lines.sort(key=_sort_key)
-    yield from lines
+        real = record.values["real"]
+        cpu = record.values["user"] + record.values["sys"]
 
-
-def _new_visit(line):
-    """
-    Initialize data structures for new visit.
-    """
-    _values.clear()
-    words = line.split()
-    visit = int(words[-4])
-    _values["visit"] = visit
-
-
-def _parse_counts(line):
-    """
-    Parse line with table row counts.
-    """
-    words = line.split()
-    count = int(words[-1])
-    table_name = words[-4]
-    if table_name.endswith("DiaObject"):
-        _values["obj_count"] += count
-    elif table_name.endswith("DiaSource"):
-        _values["src_count"] += count
-    elif table_name.endswith("DiaForcedSource"):
-        _values["fsrc_count"] += count
+        values = _visits[record.tags["visit"]]
+        values[f"{table_prefix}{prefix}_real"] += real
+        values[f"{table_prefix}{prefix}_cpu"] += cpu
 
 
-def _parse_timers(line):
-    """
-    Parse line with timer info.
-    """
-    p = line.rfind("\x1b")
-    if p > 0:
-        line = line[:p]
-    words = line.replace("=", " ").split()
-    real = float(words[-5])
-    cpu = float(words[-3]) + float(words[-1])
-    if "DiaObject select: " in line:
-        _values["obj_select_real"] += real
-        _values["obj_select_cpu"] += cpu
-    elif "DiaObject truncate: " in line:
-        _values["obj_trunc_real"] += real
-        _values["obj_trunc_cpu"] += cpu
-    elif "DiaObjectLast delete: " in line:
-        _values["obj_last_delete_real"] += real
-        _values["obj_last_delete_cpu"] += cpu
-    elif "DiaObject insert: " in line or " DiaObjectNightly insert: " in line:
-        _values["obj_insert_real"] += real
-        _values["obj_insert_cpu"] += cpu
-    elif "DiaObjectLast insert: " in line:
-        _values["obj_last_insert_real"] += real
-        _values["obj_last_insert_cpu"] += cpu
-    elif "DiaObjectNightly copy: " in line:
-        _values["obj_daily_copy_real"] += real
-        _values["obj_daily_copy_cpu"] += cpu
-    elif "DiaObjectNightly delete: " in line:
-        _values["obj_daily_delete_real"] += real
-        _values["obj_daily_delete_cpu"] += cpu
-    elif "DiaSource select: " in line:
-        _values["src_select_real"] += real
-        _values["src_select_cpu"] += cpu
-    elif "DiaSource insert: " in line:
-        _values["src_insert_real"] += real
-        _values["src_insert_cpu"] += cpu
-    elif "DiaForcedSource select: " in line:
-        _values["fsrc_select_real"] += real
-        _values["fsrc_select_cpu"] += cpu
-    elif "DiaForcedSource insert: " in line:
-        _values["fsrc_insert_real"] += real
-        _values["fsrc_insert_cpu"] += cpu
-    elif " L1-store: " in line:
-        _values["store_real"] += real
-        _values["store_cpu"] += cpu
-    elif " VisitProcessing: " in line:
-        _values["visit_proc_real"] += real
-        _values["visit_proc_cpu"] += cpu
-    elif " Finished processing visit " in line and " tile " not in line:
-        _values["visit_real"] += real
-        _values["visit_cpu"] += cpu
+def _parse_select_count(record: _Record) -> None:
+    """Parse line with counter of selected rows"""
+    values = _visits[record.tags["visit"]]
+    if record.name == "read_counts":
+        if "forcedsources" in record.values:
+            values["fsrc_selected"] += record.values["forcedsources"]
+        if "sources" in record.values:
+            values["src_selected"] += record.values["sources"]
+        values["obj_selected"] += record.values["objects"]
+        values["obj_in_fov"] += record.values["objects_filtered"]
 
 
-def _parse_select_count(line):
-    """
-    Parse line with counter of selected rows
-    """
-    words = line.split()
-    if "database found" in line:
-        if "forced sources" in line:
-            _values["fsrc_selected"] += int(words[-3])
-        elif "sources" in line:
-            _values["src_selected"] += int(words[-2])
-        else:
-            _values["obj_selected"] += int(words[-2])
-    elif "after filtering" in line:
-        _values["obj_in_fov"] += int(words[-2])
+def _parse_store_count(record: _Record) -> None:
+    """Parse line with counter of stored rows"""
+    values = _visits[record.tags["visit"]]
+    if record.name == "store_counts":
+        values["fsrc_stored"] += record.values["forcedsources"]
+        values["src_stored"] += record.values["sources"]
+        values["obj_sstored"] += record.values["objects"]
 
 
 # List of columns (keys in _values dictionary)
@@ -203,18 +159,20 @@ _cols = [
     "obj_trunc_real",
     "obj_trunc_cpu",
     "obj_insert_real",
-    "obj_insert_cpu",
+    "obj_repl_insert_real",
     "src_select_real",
     "src_select_cpu",
     "src_insert_real",
-    "src_insert_cpu",
+    "src_repl_insert_real",
     "fsrc_select_real",
     "fsrc_select_cpu",
     "fsrc_insert_real",
-    "fsrc_insert_cpu",
-    "select_real",
+    "fsrc_repl_insert_real",
+    "sum_select_real",
     "store_real",
     "store_cpu",
+    "tile_visit_real",
+    "tile_visit_cpu",
     "visit_proc_real",
     "visit_proc_cpu",
     "visit_real",
@@ -223,58 +181,43 @@ _cols = [
     "src_selected",
     "fsrc_selected",
     "obj_in_fov",
-    "obj_count",
-    "src_count",
-    "fsrc_count",
 ]
 
 
-def _value(key):
+def _value(key, stat):
     """Return value for given key, special handling for some
     computed values.
     """
-    if key == "select_real":
+    if key == "sum_select_real":
         sumkeys = ("obj_select_real", "src_select_real", "fsrc_select_real")
-        values = [_values[sk].value() for sk in sumkeys]
+        values = [stat[sk].value() for sk in sumkeys]
         values = [value for value in values if value is not None]
         if values:
             return _Stat(1, sum(values))
         else:
             return _Stat()
-    return _values[key]
+    return stat[key]
 
 
 # Flag to print CSV header line once
 _header = True
 
 
-def _end_visit(line):
-    """
-    Dump collected information
-    """
+def _end_visit(stats):
+    """Dump collected information"""
     global _header
     if _header:
         print(",".join(_cols))
         _header = False
-    print(",".join(str(_value(c)) for c in _cols))
+    print(",".join(str(_value(c, stats)) for c in _cols))
     sys.stdout.flush()
 
 
 # Map line sibstring to method
 _dispatch = [
-    (re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
-    (re.compile(" row count: "), _parse_counts),
-    (re.compile(": real="), _parse_timers),
-    (re.compile(" database found "), _parse_select_count),
-    (re.compile(" after filtering "), _parse_select_count),
-    (re.compile(r"Finished processing visit \d+, (?!tile)"), _end_visit),  # must be last
-]
-
-
-_daily_dispatch = [
-    (re.compile(r"Start processing visit \d+ (?!tile)"), _new_visit),
-    (re.compile(": real="), _parse_timers),
-    (re.compile("Done with daily activities"), _end_visit),  # must be last
+    (re.compile("_time$"), _parse_timers),
+    (re.compile("^read_counts$"), _parse_select_count),
+    (re.compile("^store_counts$"), _parse_store_count),
 ]
 
 
@@ -327,9 +270,6 @@ def main():
         "-s", "--short", action="store_true", default=False, help="Save fewer columns into CSV file."
     )
     parser.add_argument(
-        "-d", "--daily", action="store_true", default=False, help="Extract numbers from daily activities."
-    )
-    parser.add_argument(
         "-F", "--follow", default=False, action="store_true", help="Continue reading as file grows."
     )
     parser.add_argument(
@@ -357,14 +297,7 @@ def main():
             "visit_cpu",
             "visit_proc_real",
             "visit_proc_cpu",
-            "obj_count",
-            "src_count",
-            "fsrc_count",
         ]
-
-    if args.daily:
-        dispatch = _daily_dispatch
-        _cols = ["visit", "obj_daily_copy_real", "obj_daily_delete_real"]
 
     # open each file in order
     for input in args.file:
@@ -380,11 +313,31 @@ def main():
                 input = open(input, "rt")
         if args.follow:
             input = _follow(input, args.follow_timeout)
-        for line in _sort_lines(input):
-            for match, method in dispatch:
-                # if line matches then call corresponding method
-                if match.search(line):
-                    method(line)
+
+        for line in input:
+            marker = " apdb_metrics: "
+            pos = line.find(marker)
+            if pos > 0:
+                data = line[pos + len(marker):]
+                data_dict = json.loads(data)
+                assert isinstance(data_dict, dict)
+                record = _Record(**data_dict)
+                for match, method in dispatch:
+                    # if line matches then call corresponding method
+                    if match.search(record.name):
+                        method(record)
+
+                if len(_visits) > 2:
+                    visit = min(_visits)
+                    stats = _visits.pop(visit)
+                    stats["visit"] = visit
+                    _end_visit(stats)
+
+        # dump remaining stats
+        for visit in sorted(_visits):
+            stats = _visits.pop(visit)
+            stats["visit"] = visit
+            _end_visit(stats)
 
 
 #
