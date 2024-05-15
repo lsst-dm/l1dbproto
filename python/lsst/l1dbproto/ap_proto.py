@@ -574,8 +574,10 @@ class APProto:
             tile position (x, y)
         """
         name = ""
+        detector = 0
         if tile is not None:
             name = "tile={}x{} ".format(*tile)
+            detector = tile[0] * 100 + tile[1]
 
         src_read_period = self.config.src_read_period
         src_read_visits = round(self.config.src_read_period * self.config.src_read_duty_cycle)
@@ -606,10 +608,10 @@ class APProto:
             objects = self._makeDiaObjects(sources, indices, visit_time)
 
             # make all sources
-            srcs = self._makeDiaSources(sources, indices, visit_time, visit_id)
+            srcs = self._makeDiaSources(sources, indices, visit_time, visit_id, detector)
 
             # do forced photometry (can extends objects)
-            fsrcs, objects = self._forcedPhotometry(objects, latest_objects, visit_time, visit_id)
+            fsrcs, objects = self._forcedPhotometry(objects, latest_objects, visit_time, visit_id, detector)
 
             objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
             srcs = self._fillRandomData(srcs, ApdbTables.DiaSource, db)
@@ -730,6 +732,7 @@ class APProto:
         latest_objects: pandas.DataFrame,
         visit_time: astropy.time.Time,
         visit_id: int,
+        detector: int,
     ) -> tuple[pandas.DataFrame, pandas.DataFrame]:
         """Do forced photometry on latest_objects which are not in objects.
 
@@ -750,7 +753,7 @@ class APProto:
 
         if objects.empty:
             return (
-                pandas.DataFrame(columns=["diaObjectId", "ccdVisitId", "midpointMjdTai", "flags"]),
+                pandas.DataFrame(columns=["diaObjectId", "visit", "detector", "midpointMjdTai", "flags"]),
                 objects,
             )
 
@@ -761,7 +764,8 @@ class APProto:
         df1 = pandas.DataFrame(
             {
                 "diaObjectId": objects["diaObjectId"],
-                "ccdVisitId": visit_id,
+                "visit": visit_id,
+                "detector": detector,
                 "midpointMjdTai": midpointMjdTai,
                 "flags": 0,
             }
@@ -780,7 +784,8 @@ class APProto:
             df2 = pandas.DataFrame(
                 {
                     "diaObjectId": o1["diaObjectId"],
-                    "ccdVisitId": visit_id,
+                    "visit": visit_id,
+                    "detector": detector,
                     "midpointMjdTai": midpointMjdTai,
                     "flags": 0,
                 }
@@ -807,6 +812,7 @@ class APProto:
         indices: numpy.ndarray,
         visit_time: astropy.time.Time,
         visit_id: int,
+        detector: int,
     ) -> pandas.DataFrame:
         """Generate catalog of DiaSources to store in a database
 
@@ -845,7 +851,8 @@ class APProto:
             cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type="expand"))
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
         catalog = cat_polar
-        catalog["ccdVisitId"] = visit_id
+        catalog["visit"] = visit_id
+        catalog["detector"] = detector
         catalog["parentDiaSourceId"] = 0
         catalog["psFlux"] = 1.0
         catalog["psFluxErr"] = 0.01
