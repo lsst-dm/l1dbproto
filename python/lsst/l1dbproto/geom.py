@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import List, Optional, Tuple
 
 import lsst.sphgeom as sph
 import numpy as np
@@ -61,8 +60,8 @@ def make_square_tiles(
     ny: int,
     direction: np.ndarray = np.array([0.0, 0.0, 1.0]),
     exclude_disjoint: bool = True,
-    rot_rad: Optional[float] = None,
-) -> List[Tuple[int, int, sph.ConvexPolygon]]:
+    rot_rad: float | None = None,
+) -> list[tuple[int, int, sph.ConvexPolygon]]:
     """Generate mosaic of square tiles covering round patch of sky.
 
     Returns the list of tiles, each tile is represented by a tuple containing
@@ -146,8 +145,8 @@ def make_camera_tiles(
     open_angle: float,
     ndiv: int,
     direction: np.ndarray = np.array([0.0, 0.0, 1.0]),
-    rot_rad: Optional[float] = None,
-) -> List[Tuple[int, int, sph.ConvexPolygon]]:
+    rot_rad: float | None = None,
+) -> list[tuple[int, int, sph.ConvexPolygon]]:
     """Generate mosaic of square tiles in the shape of LSST camera.
 
     Returns the list of tiles, each tile is represented by a tuple containing
@@ -205,8 +204,8 @@ def make_tiles(
     open_angle: float,
     ndiv: int,
     direction: np.ndarray = np.array([0.0, 0.0, 1.0]),
-    rot_rad: Optional[float] = None,
-) -> List[Tuple[int, int, sph.ConvexPolygon]]:
+    rot_rad: float | None = None,
+) -> list[tuple[int, int, sph.ConvexPolygon]]:
     """Generate mosaic of square tiles in the shape of LSST camera.
 
     If ``ndiv`` is positive it calls `make_square_tiles` with both ``nx`` and

@@ -25,13 +25,11 @@ from __future__ import annotations
 
 import math
 import numpy
-from typing import Optional
 
 from .geom import rotation_matrix
 
 
-def rand_sphere_xyz(count: int = 1, hemi: int = 0, seed: Optional[int] = None
-                    ) -> numpy.ndarray:
+def rand_sphere_xyz(count: int = 1, hemi: int = 0, seed: int | None = None) -> numpy.ndarray:
     """Generate random points on unit sphere.
 
     Returns array of random spherical positions, array dimensions
@@ -59,8 +57,9 @@ def rand_sphere_xyz(count: int = 1, hemi: int = 0, seed: Optional[int] = None
     return r
 
 
-def rand_cone_xyz(direction: numpy.ndarray, open_angle: float, n: int = 1, seed: Optional[int] = None
-                  ) -> numpy.ndarray:
+def rand_cone_xyz(
+    direction: numpy.ndarray, open_angle: float, n: int = 1, seed: int | None = None
+) -> numpy.ndarray:
     """Generate random vectors in a cone around given vector.
 
     Parameters
@@ -79,13 +78,13 @@ def rand_cone_xyz(direction: numpy.ndarray, open_angle: float, n: int = 1, seed:
     xy /= numpy.linalg.norm(xy, axis=1)[:, numpy.newaxis]
 
     z0 = math.cos(open_angle / 2)
-    zs = rs.uniform(z0, 1., size=n)
+    zs = rs.uniform(z0, 1.0, size=n)
     sqr = numpy.sqrt(1.0 - zs * zs)
 
-    res = numpy.empty((n, 3), 'f8')
+    res = numpy.empty((n, 3), "f8")
     res[:, :2] = sqr[:, numpy.newaxis] * xy
     res[:, 2] = zs
 
     # rotate
-    R = rotation_matrix(numpy.array([0., 0., 1.]), direction)
+    R = rotation_matrix(numpy.array([0.0, 0.0, 1.0]), direction)
     return numpy.asarray(numpy.inner(res, R))

@@ -29,14 +29,13 @@ be used by other applications.
 
 import logging
 import math
-import sys
 from argparse import ArgumentParser
 
 import numpy
 from lsst.l1dbproto import generators
 
 
-def _configLogger(verbosity):
+def _configLogger(verbosity: int) -> None:
     """Configure logging based on verbosity level"""
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -47,7 +46,7 @@ def _configLogger(verbosity):
 FOV = 3.5  # degrees
 
 
-def main():
+def main() -> None:
     """Generate sources based on command line arguments."""
     descr = "One-line application description."
     parser = ArgumentParser(description=descr)
@@ -91,5 +90,4 @@ def main():
 #  run application when imported as a main module
 #
 if __name__ == "__main__":
-    rc = main()
-    sys.exit(rc)
+    main()

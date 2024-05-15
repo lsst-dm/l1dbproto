@@ -34,8 +34,9 @@ import string
 import sys
 import time
 from argparse import ArgumentParser
+from collections.abc import Iterator
 from datetime import timedelta
-from typing import Any, Iterator, List, Optional, Tuple, cast
+from typing import Any, cast
 
 import astropy.time
 import felis.datamodel
@@ -106,7 +107,7 @@ def _visitTimes(
         visit_time += interval
 
 
-def _nrows(table: Optional[pandas.DataFrame]) -> int:
+def _nrows(table: pandas.DataFrame | None) -> int:
     if table is None:
         return 0
     else:
@@ -120,10 +121,10 @@ _OUTSIDER = -666
 _TRANSIENT_START_ID = 1000000000
 
 
-class APProto(object):
+class APProto:
     """Implementation of Alert Production prototype."""
 
-    def __init__(self, argv: List[str]):
+    def __init__(self, argv: list[str]):
         self.lastObjectId = _TRANSIENT_START_ID
         self.lastSourceId = 0
 
@@ -189,7 +190,7 @@ class APProto(object):
 
         self.config = L1dbprotoConfig()
 
-    def run(self) -> Optional[int]:
+    def run(self) -> int | None:
         """Run whole shebang."""
         # load configurations
         if self.args.app_config:
@@ -286,8 +287,8 @@ class APProto(object):
             with _MON.context_tags({"visit": visit_id}):
                 if prev_visit_time is not None:
                     delta_to_prev = visit_time - prev_visit_time
-                    # If delta to previous is much longer than interval means we
-                    # just skipped day time.
+                    # If delta to previous is much longer than interval means
+                    # we just skipped day time.
                     if delta_to_prev > self.config.interval_astropy * 100:
                         midday = prev_visit_time + delta_to_prev / 2
                         _LOG.info(
@@ -312,8 +313,8 @@ class APProto(object):
                     ra = LonLat.longitudeOf(pointing_v).asDegrees()
                     dec = LonLat.latitudeOf(pointing_v).asDegrees()
 
-                    # sphgeom.Circle opening angle is actually a half of opening
-                    # angle
+                    # sphgeom.Circle opening angle is actually a half of
+                    # opening angle
                     region = Circle(pointing_v, Angle(self.config.FOV_rad / 2))
 
                     _LOG.info("Pointing ra, dec = %s, %s; xyz = %s", ra, dec, pointing_xyz)
@@ -344,9 +345,9 @@ class APProto(object):
                             _LOG.info("%s row count: %s", tbl, count)
 
                 # numpy seems to do some multi-threaded stuff which "leaks" CPU
-                # cycles to the code below and it gets counted as resource usage
-                # in timers, add a short delay here so that threads finish and
-                # don't influence our timers below.
+                # cycles to the code below and it gets counted as resource
+                # usage in timers, add a short delay here so that threads
+                # finish and don't influence our timers below.
                 time.sleep(0.1)
 
                 if self.config.divide == 1:
@@ -410,9 +411,9 @@ class APProto(object):
                         tiles = geom.make_tiles(self.config.FOV_rad, self.config.divide, pointing_v)
                         _LOG.info("Split FOV into %d tiles for MPI", len(tiles))
 
-                        # spawn subprocesses to handle individual tiles, special
-                        # care needed for self.lastSourceId because it's
-                        # propagated back from (0, 0)
+                        # spawn subprocesses to handle individual tiles,
+                        # special care needed for self.lastSourceId because
+                        # it's propagated back from (0, 0)
                         lastSourceId = self.lastSourceId
                         tile_data = []
                         for ix, iy, region in tiles:
@@ -429,7 +430,8 @@ class APProto(object):
                                     lastSourceId,
                                 )
                             ]
-                            # make sure lastSourceId is unique in in each process
+                            # make sure lastSourceId is unique in in each
+                            # process
 
                         with timer.Timer("visit_processing_time", _MON, _LOG):
                             _LOG.info("Scatter sources to %d tile processes", len(tile_data))
@@ -549,7 +551,7 @@ class APProto(object):
         region: Region,
         sources: numpy.ndarray,
         indices: numpy.ndarray,
-        tile: Optional[Tuple[int, int]] = None,
+        tile: tuple[int, int] | None = None,
     ) -> None:
         """AP processing of a single visit (with known sources)
 
@@ -632,7 +634,7 @@ class APProto(object):
         _MON.add_record("read_counts", values=counts)
 
         if not self.args.no_update:
-            with timer.Timer(f"tile_store_time", _MON, _LOG):
+            with timer.Timer("tile_store_time", _MON, _LOG):
                 # store new versions of objects
                 _LOG.info(name + "will store %d Objects", len(objects))
                 _LOG.info(name + "will store %d Sources", len(srcs))
@@ -730,7 +732,7 @@ class APProto(object):
         latest_objects: pandas.DataFrame,
         visit_time: astropy.time.Time,
         visit_id: int,
-    ) -> Tuple[pandas.DataFrame, pandas.DataFrame]:
+    ) -> tuple[pandas.DataFrame, pandas.DataFrame]:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.

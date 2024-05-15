@@ -20,7 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import astropy.time
 
@@ -53,7 +53,7 @@ class VisitInfoStore:
     def __init__(self, path: str):
         self.path = path
 
-    def lastVisit(self) -> Optional[VisitInfo]:
+    def lastVisit(self) -> VisitInfo | None:
         """Return last visit information.
 
         Returns

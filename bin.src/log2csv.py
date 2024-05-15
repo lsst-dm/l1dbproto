@@ -23,6 +23,8 @@
 
 """Script to read ap_proto logs and produce CSV file."""
 
+from __future__ import annotations
+
 import dataclasses
 import gzip
 import json
@@ -32,10 +34,11 @@ import sys
 import time
 from argparse import ArgumentParser
 from collections import defaultdict
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, cast
 
 
-def _configLogger(verbosity):
+def _configLogger(verbosity: int) -> None:
     """Configure logging based on verbosity level"""
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -45,39 +48,42 @@ def _configLogger(verbosity):
 
 @dataclasses.dataclass
 class _Record:
-
     name: str
     timestamp: float
-    tags: dict[str, str| int]
+    tags: dict[str, str | int]
     values: dict[str, Any]
     source: str
 
+    @property
+    def visit(self) -> int:
+        return cast(int, self.tags["visit"])
+
 
 class _Stat:
-    def __init__(self, cnt=0, sum=0.0):
+    def __init__(self, cnt: int = 0, sum: float = 0.0):
         self._cnt = cnt
         self._sum = sum
 
-    def value(self):
+    def value(self) -> float | None:
         if self._cnt == 0:
             return None
         else:
             return self._sum / self._cnt
 
-    def add(self, v):
+    def add(self, v: float) -> None:
         self._cnt += 1
         self._sum += v
 
-    def __add__(self, v):
+    def __add__(self, v: float) -> _Stat:
         x = _Stat(self._cnt, self._sum)
         x.add(v)
         return x
 
-    def __iadd__(self, v):
+    def __iadd__(self, v: float) -> _Stat:
         self.add(v)
         return self
 
-    def __str__(self):
+    def __str__(self) -> str:
         v = self.value()
         if v is None:
             return "NULL"
@@ -85,10 +91,9 @@ class _Stat:
             return "{:.6g}".format(v)
 
 
-
 # dictionary with visit statistics, top index is visit, second index is
 # stat name
-_visits = defaultdict(lambda: defaultdict(lambda: _Stat()))
+_visits: dict[int, dict[str, _Stat]] = defaultdict(lambda: defaultdict(lambda: _Stat()))
 
 
 def _parse_timers(record: _Record) -> None:
@@ -115,22 +120,21 @@ def _parse_timers(record: _Record) -> None:
 
     table_prefix = ""
     if table_name := record.tags.get("table"):
-        if short_name := table_map.get(table_name):
+        if short_name := table_map.get(cast(str, table_name)):
             table_prefix = f"{short_name}_"
 
     if prefix := metrics_map.get(record.name):
-
         real = record.values["real"]
         cpu = record.values["user"] + record.values["sys"]
 
-        values = _visits[record.tags["visit"]]
+        values = _visits[record.visit]
         values[f"{table_prefix}{prefix}_real"] += real
         values[f"{table_prefix}{prefix}_cpu"] += cpu
 
 
 def _parse_select_count(record: _Record) -> None:
     """Parse line with counter of selected rows"""
-    values = _visits[record.tags["visit"]]
+    values = _visits[record.visit]
     if record.name == "read_counts":
         if "forcedsources" in record.values:
             values["fsrc_selected"] += record.values["forcedsources"]
@@ -142,7 +146,7 @@ def _parse_select_count(record: _Record) -> None:
 
 def _parse_store_count(record: _Record) -> None:
     """Parse line with counter of stored rows"""
-    values = _visits[record.tags["visit"]]
+    values = _visits[record.visit]
     if record.name == "store_counts":
         values["fsrc_stored"] += record.values["forcedsources"]
         values["src_stored"] += record.values["sources"]
@@ -184,16 +188,16 @@ _cols = [
 ]
 
 
-def _value(key, stat):
+def _value(key: str, stat: dict[str, _Stat]) -> _Stat:
     """Return value for given key, special handling for some
     computed values.
     """
     if key == "sum_select_real":
         sumkeys = ("obj_select_real", "src_select_real", "fsrc_select_real")
         values = [stat[sk].value() for sk in sumkeys]
-        values = [value for value in values if value is not None]
-        if values:
-            return _Stat(1, sum(values))
+        good_values = [value for value in values if value is not None]
+        if good_values:
+            return _Stat(1, sum(good_values))
         else:
             return _Stat()
     return stat[key]
@@ -203,7 +207,7 @@ def _value(key, stat):
 _header = True
 
 
-def _end_visit(stats):
+def _end_visit(stats: dict[str, _Stat]) -> None:
     """Dump collected information"""
     global _header
     if _header:
@@ -221,7 +225,7 @@ _dispatch = [
 ]
 
 
-def _follow(input, stop_timeout_sec=60):
+def _follow(input: Any, stop_timeout_sec: int = 60) -> Iterator[str]:
     """Implement reading from a file that is being written into (tail -F)."""
     stop_re = re.compile("Stopping MPI tile processes")
 
@@ -259,7 +263,7 @@ def _follow(input, stop_timeout_sec=60):
             yield line
 
 
-def main():
+def main() -> None:
     """Parse log files and generate CSV output."""
     descr = "Read ap_proto log and extract few numbers into csv."
     parser = ArgumentParser(description=descr)
@@ -318,7 +322,7 @@ def main():
             marker = " apdb_metrics: "
             pos = line.find(marker)
             if pos > 0:
-                data = line[pos + len(marker):]
+                data = line[pos + len(marker) :]
                 data_dict = json.loads(data)
                 assert isinstance(data_dict, dict)
                 record = _Record(**data_dict)
@@ -330,13 +334,13 @@ def main():
                 if len(_visits) > 2:
                     visit = min(_visits)
                     stats = _visits.pop(visit)
-                    stats["visit"] = visit
+                    stats["visit"] = visit  # type:ignore
                     _end_visit(stats)
 
         # dump remaining stats
         for visit in sorted(_visits):
             stats = _visits.pop(visit)
-            stats["visit"] = visit
+            stats["visit"] = visit  # type:ignore
             _end_visit(stats)
 
 
@@ -344,5 +348,4 @@ def main():
 #  run application when imported as a main module
 #
 if __name__ == "__main__":
-    rc = main()
-    sys.exit(rc)
+    main()
