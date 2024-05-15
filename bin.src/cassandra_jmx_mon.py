@@ -16,7 +16,9 @@ import signal
 import socket
 import time
 from collections import defaultdict
+from collections.abc import Iterable, Iterator
 from contextlib import closing
+from typing import Any, TextIO
 
 import yaml
 from jarray import array
@@ -27,13 +29,13 @@ from javax.management.remote import JMXConnector, JMXConnectorFactory, JMXServic
 _stop = False
 
 
-def intHandler(signum, frame):
+def intHandler(signum: int, frame: Any) -> None:
     """Set stop flag."""
     global _stop
     _stop = True
 
 
-def _configLogger(verbosity):
+def _configLogger(verbosity: int) -> None:
     """Configure logging based on verbosity level"""
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -41,7 +43,7 @@ def _configLogger(verbosity):
     logging.basicConfig(level=levels.get(verbosity, logging.DEBUG), format=logfmt)
 
 
-def main():
+def main() -> None:
     """Read JMX metrics and dump them to influxdb line format."""
     parser = argparse.ArgumentParser(description="Dump JMX metrics to InfluxDB DML file")
     parser.add_argument(
@@ -99,7 +101,7 @@ def main():
         _run(conn, config, args)
 
 
-def _dump(conn):
+def _dump(conn: Any) -> None:
     """Dump full list of metrics,
 
     Parameters
@@ -116,7 +118,7 @@ def _dump(conn):
             print("    {}: {}".format(attr.name, attr.type))
 
 
-def _read_config(yaml_path):
+def _read_config(yaml_path: str) -> dict[str, Any]:
     """Read configuration from YAML file.
 
     YAML should look like:
@@ -143,7 +145,7 @@ def _read_config(yaml_path):
     return config
 
 
-def _makeOutput(args):
+def _makeOutput(args: argparse.Namespace) -> TextIO:
     """Open output file.
 
     Parameters
@@ -171,20 +173,20 @@ def _makeOutput(args):
     return out
 
 
-def _makeNames(conn, config):
+def _makeNames(conn: Any, config: dict[str, Any]) -> Iterator[tuple[str, list[str]]]:
     """Generate the names of objects to query and their attibutes.
 
     Yield
     -----
     objectName : `str`
         Name of the object.
-    attributes : `lsit`
+    attributes : `list`
         Names of attributes for this object.
     """
-    all_metrics = defaultdict(set)
+    all_metrics: dict[str, set[str]] = defaultdict(set)
 
     # get the list of objects and attributes to monitor
-    all_names = list(conn.queryNames(ObjectName("*:*"), None))
+    all_names: list[str] = list(conn.queryNames(ObjectName("*:*"), None))
 
     for metrics in config["metrics"]:
         objectName = metrics["object"]
@@ -208,7 +210,7 @@ def _makeNames(conn, config):
         yield oname, list(attributes)
 
 
-def _run(conn, config, args):
+def _run(conn: Any, config: dict[str, Any], args: argparse.Namespace) -> None:
     """Run monitoring loop until killed.
 
     Parameters
@@ -262,10 +264,10 @@ def _run(conn, config, args):
                         break
 
 
-def _attr2influx(oname, values, host):
+def _attr2influx(oname: Any, values: Iterable[Any], host: str) -> str | None:
     """Convert object name and attribute values to line protocol"""
     line = None
-    keys = dict(oname.keyPropertyList)
+    keys: dict[str, str] = dict(oname.keyPropertyList)
     t = keys.pop("type", None)
     if t is not None:
         line = t

@@ -24,14 +24,13 @@
 from __future__ import annotations
 
 import math
-from typing import Tuple
 
 import numpy
 
 from . import generators
 
 
-class DIA(object):
+class DIA:
     """Class simulating difference image analysis.
 
     This class is responsible for producing a set of DiaSources and
@@ -50,7 +49,7 @@ class DIA(object):
         self._vars = vars
         self._n_trans = n_trans
 
-    def makeSources(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
+    def makeSources(self) -> tuple[numpy.ndarray, numpy.ndarray]:
         """Generate a set of DiaSources.
 
         Some sources originate from the known variable sources (specified

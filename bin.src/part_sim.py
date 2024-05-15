@@ -31,14 +31,13 @@ partitions.
 import logging
 import math
 import random
-import sys
 from argparse import ArgumentParser
 
 from lsst.l1dbproto import generators, geom
 from lsst.sphgeom import HtmPixelization, Mq3cPixelization, Q3cPixelization, UnitVector3d
 
 
-def _configLogger(verbosity):
+def _configLogger(verbosity: int) -> None:
     """Configure logging based on verbosity level."""
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -50,7 +49,7 @@ FOV = 3.5  # degrees
 FOV_rad = FOV * math.pi / 180.0
 
 
-def main():
+def main() -> None:
     """Execute script using command line arguments."""
     descr = "Quick and dirty simulation of sky partitioning and CCD overlaps."
     parser = ArgumentParser(description=descr)
@@ -99,7 +98,7 @@ def main():
         tiles = geom.make_square_tiles(FOV_rad, 15, 15, pointing_v, rot_rad=rot_ang)
 
         # for each tile find all pixels that overlap it
-        pixel_tiles = dict()
+        pixel_tiles: dict[int, int] = {}
         for ix, iy, tile in tiles:
             ranges = pixelator.envelope(tile, 1000000)
 
@@ -142,5 +141,4 @@ def main():
 
 
 if __name__ == "__main__":
-    rc = main()
-    sys.exit(rc)
+    main()
