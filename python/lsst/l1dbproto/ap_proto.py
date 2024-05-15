@@ -369,7 +369,6 @@ class APProto:
                                 tile = (ix, iy)
                                 tags = {"tile": f"{ix}x{iy}"}
                                 with _MON.context_tags(tags):
-
                                     pid = os.fork()
                                     if pid == 0:
                                         # child
@@ -612,10 +611,9 @@ class APProto:
             # do forced photometry (can extends objects)
             fsrcs, objects = self._forcedPhotometry(objects, latest_objects, visit_time, visit_id)
 
-            if self.config.fill_empty_fields:
-                objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
-                srcs = self._fillRandomData(srcs, ApdbTables.DiaSource, db)
-                fsrcs = self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
+            objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
+            srcs = self._fillRandomData(srcs, ApdbTables.DiaSource, db)
+            fsrcs = self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
 
         if do_read_src:
             with timer.Timer(name + "Source-read", _LOG):
@@ -877,6 +875,8 @@ class APProto:
         if table_def is None:
             return catalog
         count = len(catalog)
+        if count == 0:
+            return catalog
         columns = []
         for colDef in table_def.columns:
             if table is ApdbTables.DiaObject and colDef.name in (
@@ -885,6 +885,9 @@ class APProto:
             ):
                 continue
             if colDef.name == "pixelId":
+                continue
+            if colDef.nullable and not self.config.fill_empty_fields:
+                # only fill non-null columns in this mode
                 continue
             if colDef.name not in catalog.columns:
                 # need to make a new column
