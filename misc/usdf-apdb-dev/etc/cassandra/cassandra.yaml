@@ -1057,15 +1057,15 @@ uuid_sstable_identifiers_enabled: false
 # How long the coordinator should wait for read operations to complete.
 # Lowest acceptable value is 10 ms.
 # Min unit: ms
-read_request_timeout: 10000ms
+read_request_timeout: 120000ms
 # How long the coordinator should wait for seq or index scans to complete.
 # Lowest acceptable value is 10 ms.
 # Min unit: ms
-range_request_timeout: 10000ms
+range_request_timeout: 120000ms
 # How long the coordinator should wait for writes to complete.
 # Lowest acceptable value is 10 ms.
 # Min unit: ms
-write_request_timeout: 10000ms
+write_request_timeout: 120000ms
 # How long the coordinator should wait for counter writes to complete.
 # Lowest acceptable value is 10 ms.
 # Min unit: ms
@@ -1084,7 +1084,7 @@ truncate_request_timeout: 60000ms
 # The default timeout for other, miscellaneous operations.
 # Lowest acceptable value is 10 ms.
 # Min unit: ms
-request_timeout: 10000ms
+request_timeout: 120000ms
 
 # Defensive settings for protecting Cassandra from true network partitions.
 # See (CASSANDRA-14358) for details.
@@ -1121,12 +1121,12 @@ request_timeout: 10000ms
 # on all links to or from any node in the cluster.
 #
 # Min unit: B
-# internode_application_send_queue_capacity: 4MiB
-# internode_application_send_queue_reserve_endpoint_capacity: 128MiB
-# internode_application_send_queue_reserve_global_capacity: 512MiB
-# internode_application_receive_queue_capacity: 4MiB
-# internode_application_receive_queue_reserve_endpoint_capacity: 128MiB
-# internode_application_receive_queue_reserve_global_capacity: 512MiB
+internode_application_send_queue_capacity: 400MiB
+internode_application_send_queue_reserve_endpoint_capacity: 2047MiB
+internode_application_send_queue_reserve_global_capacity: 2047MiB
+internode_application_receive_queue_capacity: 400MiB
+internode_application_receive_queue_reserve_endpoint_capacity: 2047MiB
+internode_application_receive_queue_reserve_global_capacity: 2047MiB
 
 
 # How long before a node logs slow queries. Select queries that take longer than
@@ -1473,8 +1473,8 @@ transparent_data_encryption_options:
 # Adjust the thresholds here if you understand the dangers and want to
 # scan more tombstones anyway.  These thresholds may also be adjusted at runtime
 # using the StorageService mbean.
-tombstone_warn_threshold: 1000000
-tombstone_failure_threshold: 10000000
+tombstone_warn_threshold: 10000000
+tombstone_failure_threshold: 100000000
 
 # Filtering and secondary index queries at read consistency levels above ONE/LOCAL_ONE use a
 # mechanism called replica filtering protection to ensure that results from stale replicas do
