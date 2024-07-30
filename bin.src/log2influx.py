@@ -21,8 +21,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Script to read ap_proto logs and produce CSV file.
-"""
+"""Script to read ap_proto logs and produce InfluxDB input file."""
+
+from __future__ import annotations
 
 import gzip
 import logging
@@ -31,12 +32,14 @@ import sys
 import time
 from argparse import ArgumentParser
 from collections import defaultdict
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
+from typing import Any
 
 _tz = None
 
 
-def _configLogger(verbosity):
+def _configLogger(verbosity: int) -> None:
     """Configure logging based on verbosity level"""
     levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logfmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -45,39 +48,39 @@ def _configLogger(verbosity):
 
 
 class _Stat:
-    def __init__(self, cnt=0, sum=0.0):
+    def __init__(self, cnt: int = 0, sum: float | int = 0.0):
         self._cnt = cnt
         self._sum = sum
 
     @property
-    def average(self):
+    def average(self) -> float | None:
         if self._cnt == 0:
             return None
         else:
             return round(self._sum / self._cnt, 3)
 
     @property
-    def sum(self):
+    def sum(self) -> float:
         return self._sum
 
     @property
-    def count(self):
+    def count(self) -> int:
         return self._cnt
 
-    def add(self, v):
+    def add(self, v: float) -> None:
         self._cnt += 1
         self._sum += v
 
-    def __add__(self, v):
+    def __add__(self, v: float) -> _Stat:
         x = _Stat(self._cnt, self._sum)
         x.add(v)
         return x
 
-    def __iadd__(self, v):
+    def __iadd__(self, v: float) -> _Stat:
         self.add(v)
         return self
 
-    def __str__(self):
+    def __str__(self) -> str:
         v = self.average
         if v is None:
             return "NULL"
@@ -86,20 +89,20 @@ class _Stat:
 
 
 # dictionary with context info
-_context = defaultdict(lambda: _Stat())
-_counters = defaultdict(lambda: _Stat())
-_timers_real = defaultdict(lambda: _Stat())
-_timers_cpu = defaultdict(lambda: _Stat())
+_context: dict[str, _Stat | int | None] = defaultdict(lambda: _Stat())
+_counters: dict[str, _Stat] = defaultdict(lambda: _Stat())
+_timers_real: dict[str, _Stat] = defaultdict(lambda: _Stat())
+_timers_cpu: dict[str, _Stat] = defaultdict(lambda: _Stat())
 
 
-def _sort_lines(iterable, num=100):
+def _sort_lines(iterable: Iterable[str], num: int = 100) -> Iterator[str]:
     """Sort input file according to timestamps.
 
     Log files are written from multiple process and sometimes ordering can
     be violated. This method sorts inputs according to timestamps.
     """
 
-    def _sort_key(line):
+    def _sort_key(line: str) -> list[str]:
         # extract timestamp
         return line.split()[:2]
 
@@ -113,7 +116,7 @@ def _sort_lines(iterable, num=100):
     yield from lines
 
 
-def _timestamp(line):
+def _timestamp(line: str) -> int:
     """Convert timestamp to nanoseconds.
 
     Timestamp looks like "2020-02-10 18:40:00,148".
@@ -128,7 +131,7 @@ _re_tile1 = re.compile(r" tile=(\d+)x(\d+) ")
 _re_tile2 = re.compile(r" tile \((\d+), (\d+)\)")
 
 
-def _tile(line):
+def _tile(line: str) -> str:
     """Extract tile Id from a line"""
     m = _re_tile1.search(line) or _re_tile2.search(line)
     if m:
@@ -136,7 +139,7 @@ def _tile(line):
     return "fov"
 
 
-def _new_visit(line):
+def _new_visit(line: str) -> None:
     """Initialize data structures for new visit."""
     _context.clear()
     _counters.clear()
@@ -150,7 +153,7 @@ def _new_visit(line):
     print(f"visit start={visit} {ts}")
 
 
-def _new_tile_visit(line):
+def _new_tile_visit(line: str) -> None:
     pass
     # words = line.split()
     # visit = int(words[-7])
@@ -159,7 +162,7 @@ def _new_tile_visit(line):
     # print(f"visit,tile='{tile}' start={visit} {ts}")
 
 
-def _parse_counts(line):
+def _parse_counts(line: str) -> None:
     """
     Parse line with table row counts.
     """
@@ -170,7 +173,7 @@ def _parse_counts(line):
     print(f"count,table={table_name} value={count} {ts}")
 
 
-def _parse_timer(line):
+def _parse_timer(line: str) -> tuple[float, float]:
     """Parse timer info"""
     p = line.rfind("\x1b")
     if p > 0:
@@ -181,10 +184,8 @@ def _parse_timer(line):
     return real, cpu
 
 
-def _parse_timers(line):
-    """
-    Parse line with timer info.
-    """
+def _parse_timers(line: str) -> None:
+    """Parse line with timer info."""
     real, cpu = _parse_timer(line)
     timer = None
     if "DiaObject select: " in line:
@@ -223,7 +224,7 @@ def _parse_timers(line):
         _timers_cpu[timer] += cpu
 
 
-def _parse_select_count(line):
+def _parse_select_count(line: str) -> None:
     """Parse line with counter of selected rows"""
     words = line.split()
     key = None
@@ -247,7 +248,7 @@ def _parse_select_count(line):
         _counters[key] += value
 
 
-def _parse_queries_count(line):
+def _parse_queries_count(line: str) -> None:
     """Parse line with counter of select queries"""
     words = line.split()
     key = None
@@ -273,7 +274,7 @@ def _parse_queries_count(line):
         _counters[key] += value
 
 
-def _parse_store_count(line):
+def _parse_store_count(line: str) -> None:
     """Parse line with counter of stored rows"""
     words = line.split()
     key = None
@@ -293,10 +294,8 @@ def _parse_store_count(line):
         _counters[key] += value
 
 
-def _end_tile_visit(line):
-    """
-    Dump collected information
-    """
+def _end_tile_visit(line: str) -> None:
+    """Dump collected information"""
     # visit = _context['visit']
     # ts = _timestamp(line)
     # real, cpu = _parse_timer(line)
@@ -304,10 +303,8 @@ def _end_tile_visit(line):
     # print(f"visit,tile='{tile}' end={visit},real={real},cpu={cpu} {ts}")
 
 
-def _end_visit(line):
-    """
-    Dump collected information
-    """
+def _end_visit(line: str) -> None:
+    """Dump collected information"""
     ts = _timestamp(line)
     visit = _context["visit"]
     _context["visit"] = None
@@ -339,7 +336,7 @@ _dispatch = [
 ]
 
 
-def _follow(input, stop_timeout_sec=60):
+def _follow(input: Any, stop_timeout_sec: int = 60) -> Iterator[str]:
     """Implement reading from a file that is being written into (tail -F)."""
     stop_re = re.compile("Stopping MPI tile processes")
 
@@ -377,8 +374,8 @@ def _follow(input, stop_timeout_sec=60):
             yield line
 
 
-def main():
-    """PArse logs and generate influxdb line format."""
+def main() -> None:
+    """Parse logs and generate influxdb line format."""
     descr = "Read ap_proto log and extract few numbers into csv."
     parser = ArgumentParser(description=descr)
     parser.add_argument(
@@ -440,5 +437,4 @@ def main():
 #  run application when imported as a main module
 #
 if __name__ == "__main__":
-    rc = main()
-    sys.exit(rc)
+    main()
