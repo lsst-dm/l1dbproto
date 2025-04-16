@@ -47,7 +47,7 @@ def rotation_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     if sin == 0:
         return np.identity(3)
     cos = np.vdot(a, b)
-    vx = np.mat([[0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+    vx = np.asmatrix([[0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
 
     R = np.identity(3) + vx + vx * vx * (1 - cos) / (sin**2)
 
