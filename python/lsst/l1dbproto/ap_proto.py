@@ -775,6 +775,8 @@ class APProto:
         catalog = pandas.DataFrame(
             {
                 "diaObjectId": objects["diaObjectId"],
+                "ra": objects["ra"],
+                "dec": objects["dec"],
                 "visit": visit_id,
                 "detector": detector,
                 "midpointMjdTai": midpointMjdTai,
@@ -888,7 +890,7 @@ class APProto:
                 elif colDef.datatype is felis.datamodel.DataType.byte:
                     data = rng.integers(0, 255, count, dtype=numpy.int8)
                 elif colDef.datatype is felis.datamodel.DataType.boolean:
-                    data = rng.integers(0, 1, count, dtype=numpy.int8)
+                    data = rng.integers(0, 1, count, dtype=numpy.bool_)
                 elif colDef.datatype is felis.datamodel.DataType.binary:
                     data = [rng.bytes(colDef.length or 3) for i in range(count)]
                 elif colDef.datatype in (
