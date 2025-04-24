@@ -590,47 +590,48 @@ class APProto:
 
         counts: dict[str, int] = {}
 
-        with timer.Timer(name + "Objects-read", _LOG):
-            # Retrieve DiaObjects (latest versions) from database for matching,
-            # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(region)
-            _LOG.info(name + "database found %s objects", _nrows(latest_objects))
-            counts["objects"] = _nrows(latest_objects)
+        with timer.Timer("tile_read_time", _MON, _LOG):
+            with timer.Timer(name + "Objects-read", _LOG):
+                # Retrieve DiaObjects (latest versions) from database for matching,
+                # this will produce wider coverage so further filtering is needed
+                latest_objects = db.getDiaObjects(region)
+                _LOG.info(name + "database found %s objects", _nrows(latest_objects))
+                counts["objects"] = _nrows(latest_objects)
 
-            # filter database objects to a mask
-            latest_objects = self._filterDiaObjects(latest_objects, region)
-            _LOG.info(name + "after filtering %s objects", _nrows(latest_objects))
-            counts["objects_filtered"] = _nrows(latest_objects)
+                # filter database objects to a mask
+                latest_objects = self._filterDiaObjects(latest_objects, region)
+                _LOG.info(name + "after filtering %s objects", _nrows(latest_objects))
+                counts["objects_filtered"] = _nrows(latest_objects)
 
-        with timer.Timer(name + "S2O-matching", _LOG):
-            # make all sources
-            srcs = self._makeDiaSources(sources, indices, visit_time, visit_id, detector)
+            with timer.Timer(name + "S2O-matching", _LOG):
+                # make all sources
+                srcs = self._makeDiaSources(sources, indices, visit_time, visit_id, detector)
 
-            # create all new DiaObjects
-            objects = self._makeDiaObjects(sources, indices, latest_objects, visit_time)
+                # create all new DiaObjects
+                objects = self._makeDiaObjects(sources, indices, latest_objects, visit_time)
 
-            # do forced photometry (can extends objects)
-            fsrcs = self._forcedPhotometry(objects, visit_time, visit_id, detector)
+                # do forced photometry (can extends objects)
+                fsrcs = self._forcedPhotometry(objects, visit_time, visit_id, detector)
 
-            objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
-            srcs = self._fillRandomData(srcs, ApdbTables.DiaSource, db)
-            fsrcs = self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
+                objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
+                srcs = self._fillRandomData(srcs, ApdbTables.DiaSource, db)
+                fsrcs = self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
 
-        if do_read_src:
-            with timer.Timer(name + "Source-read", _LOG):
-                latest_objects_ids = list(latest_objects["diaObjectId"])
+            if do_read_src:
+                with timer.Timer(name + "Source-read", _LOG):
+                    latest_objects_ids = list(latest_objects["diaObjectId"])
 
-                read_srcs = db.getDiaSources(region, latest_objects_ids, visit_time)
-                _LOG.info(name + "database found %s sources", _nrows(read_srcs))
-                counts["sources"] = _nrows(read_srcs)
+                    read_srcs = db.getDiaSources(region, latest_objects_ids, visit_time)
+                    _LOG.info(name + "database found %s sources", _nrows(read_srcs))
+                    counts["sources"] = _nrows(read_srcs)
 
-                read_srcs = db.getDiaForcedSources(region, latest_objects_ids, visit_time)
-                _LOG.info(name + "database found %s forced sources", _nrows(read_srcs))
-                counts["forcedsources"] = _nrows(read_srcs)
-        else:
-            _LOG.info("skipping reading of sources for this visit")
+                    read_srcs = db.getDiaForcedSources(region, latest_objects_ids, visit_time)
+                    _LOG.info(name + "database found %s forced sources", _nrows(read_srcs))
+                    counts["forcedsources"] = _nrows(read_srcs)
+            else:
+                _LOG.info("skipping reading of sources for this visit")
 
-        _MON.add_record("read_counts", values=counts)
+            _MON.add_record("read_counts", values=counts)
 
         if not self.args.no_update:
             with timer.Timer("tile_store_time", _MON, _LOG):
