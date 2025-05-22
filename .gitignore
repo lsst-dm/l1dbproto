@@ -16,3 +16,4 @@ pytest_session.txt
 python/lsst/l1dbproto/version.py
 /bin/
 .pytest_cache/
+lsst_l1dbproto.dist-info

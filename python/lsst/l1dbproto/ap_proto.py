@@ -231,8 +231,7 @@ class APProto:
                 )
                 if num_proc != num_tiles:
                     raise ValueError(
-                        f"Number of MPI processes ({num_proc}) "
-                        f"does not match number of tiles ({num_tiles})"
+                        f"Number of MPI processes ({num_proc}) does not match number of tiles ({num_tiles})"
                     )
                 if rank != 0:
                     # run simple loop for all non-master processes
@@ -591,47 +590,48 @@ class APProto:
 
         counts: dict[str, int] = {}
 
-        with timer.Timer(name + "Objects-read", _LOG):
-            # Retrieve DiaObjects (latest versions) from database for matching,
-            # this will produce wider coverage so further filtering is needed
-            latest_objects = db.getDiaObjects(region)
-            _LOG.info(name + "database found %s objects", _nrows(latest_objects))
-            counts["objects"] = _nrows(latest_objects)
+        with timer.Timer("tile_read_time", _MON, _LOG):
+            with timer.Timer(name + "Objects-read", _LOG):
+                # Retrieve DiaObjects (latest versions) from database for matching,
+                # this will produce wider coverage so further filtering is needed
+                latest_objects = db.getDiaObjects(region)
+                _LOG.info(name + "database found %s objects", _nrows(latest_objects))
+                counts["objects"] = _nrows(latest_objects)
 
-            # filter database objects to a mask
-            latest_objects = self._filterDiaObjects(latest_objects, region)
-            _LOG.info(name + "after filtering %s objects", _nrows(latest_objects))
-            counts["objects_filtered"] = _nrows(latest_objects)
+                # filter database objects to a mask
+                latest_objects = self._filterDiaObjects(latest_objects, region)
+                _LOG.info(name + "after filtering %s objects", _nrows(latest_objects))
+                counts["objects_filtered"] = _nrows(latest_objects)
 
-        with timer.Timer(name + "S2O-matching", _LOG):
-            # create all new DiaObjects
-            objects = self._makeDiaObjects(sources, indices, visit_time)
+            with timer.Timer(name + "S2O-matching", _LOG):
+                # make all sources
+                srcs = self._makeDiaSources(sources, indices, visit_time, visit_id, detector)
 
-            # make all sources
-            srcs = self._makeDiaSources(sources, indices, visit_time, visit_id, detector)
+                # create all new DiaObjects
+                objects = self._makeDiaObjects(sources, indices, latest_objects, visit_time)
 
-            # do forced photometry (can extends objects)
-            fsrcs, objects = self._forcedPhotometry(objects, latest_objects, visit_time, visit_id, detector)
+                # do forced photometry (can extends objects)
+                fsrcs = self._forcedPhotometry(objects, visit_time, visit_id, detector)
 
-            objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
-            srcs = self._fillRandomData(srcs, ApdbTables.DiaSource, db)
-            fsrcs = self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
+                objects = self._fillRandomData(objects, ApdbTables.DiaObject, db)
+                srcs = self._fillRandomData(srcs, ApdbTables.DiaSource, db)
+                fsrcs = self._fillRandomData(fsrcs, ApdbTables.DiaForcedSource, db)
 
-        if do_read_src:
-            with timer.Timer(name + "Source-read", _LOG):
-                latest_objects_ids = list(latest_objects["diaObjectId"])
+            if do_read_src:
+                with timer.Timer(name + "Source-read", _LOG):
+                    latest_objects_ids = list(latest_objects["diaObjectId"])
 
-                read_srcs = db.getDiaSources(region, latest_objects_ids, visit_time)
-                _LOG.info(name + "database found %s sources", _nrows(read_srcs))
-                counts["sources"] = _nrows(read_srcs)
+                    read_srcs = db.getDiaSources(region, latest_objects_ids, visit_time)
+                    _LOG.info(name + "database found %s sources", _nrows(read_srcs))
+                    counts["sources"] = _nrows(read_srcs)
 
-                read_srcs = db.getDiaForcedSources(region, latest_objects_ids, visit_time)
-                _LOG.info(name + "database found %s forced sources", _nrows(read_srcs))
-                counts["forcedsources"] = _nrows(read_srcs)
-        else:
-            _LOG.info("skipping reading of sources for this visit")
+                    read_srcs = db.getDiaForcedSources(region, latest_objects_ids, visit_time)
+                    _LOG.info(name + "database found %s forced sources", _nrows(read_srcs))
+                    counts["forcedsources"] = _nrows(read_srcs)
+            else:
+                _LOG.info("skipping reading of sources for this visit")
 
-        _MON.add_record("read_counts", values=counts)
+            _MON.add_record("read_counts", values=counts)
 
         if not self.args.no_update:
             with timer.Timer("tile_store_time", _MON, _LOG):
@@ -676,13 +676,15 @@ class APProto:
         self,
         sources: numpy.ndarray,
         indices: numpy.ndarray,
+        known_objects: pandas.DataFrame,
         visit_time: astropy.time.Time,
     ) -> pandas.DataFrame:
         """Over-simplified implementation of source-to-object matching and
         new DiaObject generation.
 
         Currently matching is based on info passed along by source
-        generator and does not even use DiaObjects from database.
+        generator and does not even use DiaObjects from database (meaning that
+        matching is 100% perfect).
 
         Parameters
         ----------
@@ -691,6 +693,8 @@ class APProto:
         indices : `numpy.array`
             array of indices of sources, 1-dim ndarray, transient sources
             have negative indices
+        known_objects : `pandas.DataFrame`
+            Catalog of DiaObjects read from APDB.
         visit_time : `astropy.time.Time`
             Visit time.
 
@@ -710,30 +714,41 @@ class APProto:
         catalog = cast(pandas.DataFrame, catalog[catalog["diaObjectId"] != _OUTSIDER])
 
         if len(catalog) == 0:
-            return pandas.DataFrame(columns=["ra", "dec", "diaObjectId"])
+            return pandas.DataFrame(
+                columns=["ra", "dec", "diaObjectId", "nDiaSources", "lastNonForcedSource"]
+            )
 
         cat_polar = cast(pandas.DataFrame, catalog.apply(polar, axis=1, result_type="expand"))
         cat_polar["diaObjectId"] = catalog["diaObjectId"]
         catalog = cat_polar
 
-        n_trans = sum(catalog["diaObjectId"] >= _TRANSIENT_START_ID)
+        # Set nDiaSources for each object, update from existing objects.
+        # Could do it with some pandas magic, but it's insane.
+        count_map = {
+            obj_id: count
+            for obj_id, count in known_objects[["diaObjectId", "nDiaSources"]].itertuples(index=False)
+        }
 
-        _LOG.info(
-            "found %s matching objects and %s transients/noise",
-            _nrows(catalog) - n_trans,
-            n_trans,
-        )
+        def _count_sources(row: Any) -> pandas.Series:
+            count = count_map.get(row.diaObjectId, 0) + 1
+            return pandas.Series([count], index=["nDiaSources"])
+
+        catalog["nDiaSources"] = catalog.apply(_count_sources, axis=1, result_type="expand")
+
+        catalog["lastNonForcedSource"] = visit_time.datetime
+
+        n_trans = sum(catalog["diaObjectId"] >= _TRANSIENT_START_ID)
+        _LOG.info("found %s matching objects and %s transients/noise", _nrows(catalog) - n_trans, n_trans)
 
         return catalog
 
     def _forcedPhotometry(
         self,
         objects: pandas.DataFrame,
-        latest_objects: pandas.DataFrame,
         visit_time: astropy.time.Time,
         visit_id: int,
         detector: int,
-    ) -> tuple[pandas.DataFrame, pandas.DataFrame]:
+    ) -> pandas.DataFrame:
         """Do forced photometry on latest_objects which are not in objects.
 
         Extends objects catalog with new DiaObjects.
@@ -742,8 +757,6 @@ class APProto:
         ----------
         objects : `pandas.DataFrame`
             Catalog containing DiaObject records
-        latest_objects : `pandas.DataFrame`
-            Catalog containing DiaObject records
         visit_time : `astropy.time.Time`
             Visit time.
         visit_id : `int`
@@ -751,60 +764,27 @@ class APProto:
         """
         midpointMjdTai = visit_time.tai.mjd
 
+        # Do forced photometry on objects with nDiaSources > 1, and only
+        # for 30 days after last detection
+        objects = cast(pandas.DataFrame, objects[objects["nDiaSources"] > 1])
+        cutoff = visit_time.datetime - timedelta(days=self.config.forced_cutoff_days)
+        objects = cast(pandas.DataFrame, objects[objects["lastNonForcedSource"] > cutoff])
+
         if objects.empty:
-            return (
-                pandas.DataFrame(columns=["diaObjectId", "visit", "detector", "midpointMjdTai", "flags"]),
-                objects,
-            )
+            return pandas.DataFrame(columns=["diaObjectId", "visit", "detector", "midpointMjdTai"])
 
-        # Ids of the detected objects
-        ids = set(objects["diaObjectId"])
-
-        # do forced photometry for all detected DiaObjects
-        df1 = pandas.DataFrame(
+        catalog = pandas.DataFrame(
             {
                 "diaObjectId": objects["diaObjectId"],
+                "ra": objects["ra"],
+                "dec": objects["dec"],
                 "visit": visit_id,
                 "detector": detector,
                 "midpointMjdTai": midpointMjdTai,
-                "flags": 0,
             }
         )
 
-        # do forced photometry for non-detected DiaObjects (newer than cutoff)
-        o1 = cast(pandas.DataFrame, latest_objects[~latest_objects["diaObjectId"].isin(ids)])
-
-        # only do it for 30 days after last detection
-        cutoff = visit_time.datetime - timedelta(days=self.config.forced_cutoff_days)
-        o1 = cast(pandas.DataFrame, o1[o1["lastNonForcedSource"] > cutoff])
-
-        if o1.empty:
-            catalog = df1
-        else:
-            df2 = pandas.DataFrame(
-                {
-                    "diaObjectId": o1["diaObjectId"],
-                    "visit": visit_id,
-                    "detector": detector,
-                    "midpointMjdTai": midpointMjdTai,
-                    "flags": 0,
-                }
-            )
-
-            # extend forced sources
-            catalog = pandas.concat([df1, df2])
-
-            # also extend objects
-            o2 = pandas.DataFrame(
-                {
-                    "diaObjectId": o1["diaObjectId"],
-                    "ra": o1["ra"],
-                    "dec": o1["dec"],
-                }
-            )
-            objects = pandas.concat([objects, o2])
-
-        return catalog, objects
+        return catalog
 
     def _makeDiaSources(
         self,
@@ -857,7 +837,6 @@ class APProto:
         catalog["psFlux"] = 1.0
         catalog["psFluxErr"] = 0.01
         catalog["midpointMjdTai"] = midpointMjdTai
-        catalog["flags"] = 0
 
         nrows = catalog.shape[0]
         catalog["diaSourceId"] = range(self.lastSourceId + 1, self.lastSourceId + 1 + nrows)
@@ -912,7 +891,7 @@ class APProto:
                 elif colDef.datatype is felis.datamodel.DataType.byte:
                     data = rng.integers(0, 255, count, dtype=numpy.int8)
                 elif colDef.datatype is felis.datamodel.DataType.boolean:
-                    data = rng.integers(0, 1, count, dtype=numpy.int8)
+                    data = rng.integers(0, 1, count, dtype=numpy.bool_)
                 elif colDef.datatype is felis.datamodel.DataType.binary:
                     data = [rng.bytes(colDef.length or 3) for i in range(count)]
                 elif colDef.datatype in (
