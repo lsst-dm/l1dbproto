@@ -324,6 +324,7 @@ class APProto:
                         self.config.FOV_rad,
                         var_sources,
                         self.config.false_per_visit + self.config.transient_per_visit,
+                        self.config.detection_fraction,
                     )
                     sources, indices = dia.makeSources()
                     _LOG.info("DIA generated %s sources", len(sources))

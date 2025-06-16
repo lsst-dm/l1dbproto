@@ -37,7 +37,14 @@ class DIA:
     DiaForcedSources.
     """
 
-    def __init__(self, xyz: numpy.ndarray, open_angle: float, vars: numpy.ndarray, n_trans: int):
+    def __init__(
+        self,
+        xyz: numpy.ndarray,
+        open_angle: float,
+        vars: numpy.ndarray,
+        n_trans: int,
+        detection_fraction: float = 1.0,
+    ):
         """
         @param xyz:  unit vector giving pointing direction
         @param open_angle: opening angle (full) of FOV, radians
@@ -48,6 +55,7 @@ class DIA:
         self._open_angle = open_angle
         self._vars = vars
         self._n_trans = n_trans
+        self._detection_fraction = detection_fraction
 
     def makeSources(self) -> tuple[numpy.ndarray, numpy.ndarray]:
         """Generate a set of DiaSources.
@@ -67,6 +75,9 @@ class DIA:
         products = numpy.inner(self._xyz, self._vars)
 
         var_indices = numpy.nonzero(products > cos_open)
+        if self._detection_fraction < 1.0:
+            mask = numpy.random.uniform(size=len(var_indices[0])) <= self._detection_fraction
+            var_indices = (var_indices[0][mask],)
 
         n_trans = numpy.random.poisson(self._n_trans)
         transients = generators.rand_cone_xyz(self._xyz, self._open_angle, n_trans)
