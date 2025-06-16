@@ -59,12 +59,16 @@ class L1dbprotoConfig(Config):
         ),
     )
     start_visit_id = Field[int](
-        default=1,
+        default=0,
         doc="Starting visit ID. Used only at first invocation" " to intialize database.",
     )
     sources_file = Field[str](
         doc="Name of input file with sources (numpy data)",
         default="var_sources.npy",
+    )
+    detection_fraction = Field[float](
+        default=1.0,
+        doc="Fraction of the variable objects that generate DiaSources",
     )
     mp_mode = ChoiceField[str](
         allowed=dict(fork="Forking mode", mpi="MPI mode"),
