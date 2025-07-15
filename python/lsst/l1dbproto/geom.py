@@ -19,13 +19,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Module defining methods for handling geometry.
-"""
+"""Module defining methods for handling geometry."""
+
 from __future__ import annotations
 
 import logging
 import math
 
+import lsst.geom
 import lsst.sphgeom as sph
 import numpy as np
 
@@ -66,7 +67,7 @@ def make_square_tiles(
 
     Returns the list of tiles, each tile is represented by a tuple containing
     three elements: division index for x axis, division index for y axis, and
-    `sphgeom.ConvexPolygon` object.
+    `lsst.sphgeom.ConvexPolygon` object.
 
     Parameters
     ----------
@@ -151,7 +152,7 @@ def make_camera_tiles(
 
     Returns the list of tiles, each tile is represented by a tuple containing
     three elements: division index for x axis, division index for y axis, and
-    `sphgeom.ConvexPolygon` object.
+    `lsst.sphgeom.ConvexPolygon` object.
 
     Geometry is made of 5x5 rafts with 4 corner rafts missing, and with each
     raft divided further into ``ndiv`` "CCDs" in each direction. Total number
@@ -263,3 +264,39 @@ def triangle_area(v0: sph.UnitVector3d, v1: sph.UnitVector3d, v2: sph.UnitVector
 
     area = alpha + beta + gamma - math.pi
     return area
+
+
+def padded_region(region: sph.Region, margin_arcsec: float = 20.0) -> sph.Region:
+    """Pad region with a specified margin.
+
+    Parameters
+    ----------
+    region : `lsst.sphgeom.Region`
+        Region to pad.
+    margin_arcsec : float, optional
+        PAdding margin in arcseconds.
+
+    Returns
+    -------
+    region : `lsst.sphgeom.Region`
+        Padded region.
+
+    Notes
+    -----
+    Copied from ap_association.
+    """
+    margin = sph.Angle.fromDegrees(margin_arcsec / 3600.0)
+    if isinstance(region, sph.ConvexPolygon):
+        # This is an ad-hoc, approximate implementation. It should be good
+        # enough for catalog loading, but is not a general-purpose solution.
+        center = lsst.geom.SpherePoint(region.getCentroid())
+        corners = [lsst.geom.SpherePoint(c) for c in region.getVertices()]
+        # Approximate the region as a Euclidian square
+        # geom.Angle(sph.Angle) converter not pybind-wrapped???
+        diagonal_margin = lsst.geom.Angle(margin.asRadians() * math.sqrt(2.0))
+        padded = [c.offset(center.bearingTo(c), diagonal_margin) for c in corners]
+        return sph.ConvexPolygon.convexHull([c.getVector() for c in padded])
+    elif hasattr(region, "dilatedBy"):
+        return region.dilatedBy(margin)
+    else:
+        return region.getBoundingCircle().dilatedBy(margin)

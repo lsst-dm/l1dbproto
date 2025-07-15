@@ -589,6 +589,9 @@ class APProto:
             if not region.contains(UnitVector3d(xyz[0], xyz[1], xyz[2])):
                 indices[i] = _OUTSIDER
 
+        # Add padding.
+        region = geom.padded_region(region, self.config.detector_region_padding)
+
         counts: dict[str, int] = {}
 
         with timer.Timer("tile_read_time", _MON, _LOG):

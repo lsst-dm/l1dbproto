@@ -34,6 +34,7 @@ class L1dbprotoConfig(Config):
     """Configuration parameters for ap_proto."""
 
     FOV_deg = Field[float](doc="FOV in degrees", default=3.5)
+    detector_region_padding = Field[float](doc="Extra padding for detector region in arcsec", default=52.)
     transient_per_visit = Field[int](doc="average number of transients per visit", default=100)
     false_per_visit = Field[int](doc="average number of false positives per visit", default=5050)
     divide = Field[int](
