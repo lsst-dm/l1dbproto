@@ -19,8 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Configuration class for l1dbproto
-"""
+"""Configuration class for l1dbproto"""
 
 __all__ = ["L1dbprotoConfig"]
 
@@ -33,7 +32,8 @@ from lsst.pex.config import ChoiceField, Config, Field
 class L1dbprotoConfig(Config):
     """Configuration parameters for ap_proto."""
 
-    FOV_deg = Field[float](doc="FOV in degrees", default=3.5)
+    FOV_deg = Field[float](doc="FOV in degrees", default=3.52)
+    detector_region_padding = Field[float](doc="Extra padding for detector region in arcsec", default=52.0)
     transient_per_visit = Field[int](doc="average number of transients per visit", default=100)
     false_per_visit = Field[int](doc="average number of false positives per visit", default=5050)
     divide = Field[int](
@@ -47,7 +47,7 @@ class L1dbprotoConfig(Config):
     )
     interval = Field[int](doc="Interval between visits in seconds, def: 45", default=45)
     forced_cutoff_days = Field[int](
-        doc=("Period after which we stop forced photometry " "if there was no observed source, def: 30"),
+        doc=("Period after which we stop forced photometry if there was no observed source, def: 30"),
         default=30,
     )
     start_time = Field[str](
@@ -60,7 +60,7 @@ class L1dbprotoConfig(Config):
     )
     start_visit_id = Field[int](
         default=0,
-        doc="Starting visit ID. Used only at first invocation" " to intialize database.",
+        doc="Starting visit ID. Used only at first invocation to intialize database.",
     )
     sources_file = Field[str](
         doc="Name of input file with sources (numpy data)",
