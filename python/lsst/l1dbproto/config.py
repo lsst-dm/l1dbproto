@@ -99,6 +99,10 @@ class L1dbprotoConfig(Config):
         default=None,
     )
     mon_rules = Field[str](doc="Comma-separated list of monitoring filter rules.", default="")
+    random_delay = Field[float](
+        doc="Random delay before processing each detector in seconds.",
+        default=0.0,
+    )
 
     @property
     def FOV_rad(self) -> float:

@@ -30,6 +30,7 @@ __all__ = ["APProto"]
 
 import logging
 import os
+import random
 import string
 import sys
 import time
@@ -181,6 +182,13 @@ class APProto:
             action="store_true",
             help="DO not update database, only reading is performed.",
         )
+        parser.add_argument(
+            "-R",
+            "--re-connect",
+            default=False,
+            action="store_true",
+            help="Create new APDB connection on each visit.",
+        )
 
         # parse options
         self.args = parser.parse_args(argv)
@@ -192,6 +200,8 @@ class APProto:
 
     def run(self) -> int | None:
         """Run whole shebang."""
+        random.seed()
+
         # load configurations
         if self.args.app_config:
             self.config.load(self.args.app_config)
@@ -208,7 +218,9 @@ class APProto:
             monitor.MonService().set_filters(rules)
 
         # instantiate db interface
-        db = Apdb.from_uri(self.args.config)
+        db: Apdb | None = None
+        if not self.args.re_connect:
+            db = Apdb.from_uri(self.args.config)
 
         visitInfoStore = VisitInfoStore(self.args.visits_file)
 
@@ -240,10 +252,8 @@ class APProto:
 
         # Initialize starting values from database visits table
         last_visit = visitInfoStore.lastVisit()
-        prev_visit_time: astropy.time.Time | None = None
         if last_visit is not None:
             start_visit_id = last_visit.visitId + 1
-            prev_visit_time = last_visit.visitTime
             start_time = last_visit.visitTime + self.config.interval_astropy
         else:
             start_visit_id = self.config.start_visit_id
@@ -284,20 +294,6 @@ class APProto:
         visitTimes = _visitTimes(start_time, self.config.interval_astropy, self.args.num_visits)
         for visit_id, visit_time in enumerate(visitTimes, start_visit_id):
             with _MON.context_tags({"visit": visit_id}):
-                if prev_visit_time is not None:
-                    delta_to_prev = visit_time - prev_visit_time
-                    # If delta to previous is much longer than interval means
-                    # we just skipped day time.
-                    if delta_to_prev > self.config.interval_astropy * 100:
-                        midday = prev_visit_time + delta_to_prev / 2
-                        _LOG.info(
-                            COLOR_YELLOW + "+++ Start daily activities at %s" + COLOR_RESET,
-                            midday.isot,
-                        )
-                        db.dailyJob()
-                        self._daily_insert_id_cleanup(self.args.config, midday)
-                        _LOG.info(COLOR_YELLOW + "+++ Done with daily activities" + COLOR_RESET)
-
                 _LOG.info(
                     COLOR_GREEN + "+++ Start processing visit %s at %s" + COLOR_RESET,
                     visit_id,
@@ -334,15 +330,6 @@ class APProto:
                         if indices[i] < 0:
                             self.lastObjectId += 1
                             indices[i] = self.lastObjectId
-
-                # print current database row counts, this takes long time
-                # so only do it once in a while
-                modu = 200 if visit_id <= 10000 else 1000
-                if visit_id % modu == 0:
-                    if hasattr(db, "tableRowCount"):
-                        counts = db.tableRowCount()
-                        for tbl, count in sorted(counts.items()):
-                            _LOG.info("%s row count: %s", tbl, count)
 
                 # numpy seems to do some multi-threaded stuff which "leaks" CPU
                 # cycles to the code below and it gets counted as resource
@@ -441,8 +428,6 @@ class APProto:
                     # store last visit info
                     visitInfoStore.saveVisit(visit_id, visit_time, self.lastObjectId, self.lastSourceId)
 
-                prev_visit_time = visit_time
-
                 _LOG.info(
                     COLOR_BLUE + "--- Finished processing visit %s, time: %s" + COLOR_RESET,
                     visit_id,
@@ -458,12 +443,12 @@ class APProto:
 
         return 0
 
-    def run_mpi_tile_loop(self, db: Apdb, comm: Any) -> None:
+    def run_mpi_tile_loop(self, db: Apdb | None, comm: Any) -> None:
         """Execute visit loop inside non-master MPI process"""
         while self.run_mpi_tile(db, comm):
             pass
 
-    def run_mpi_tile(self, db: Apdb, comm: Any, tile_data: Any = None) -> Any:
+    def run_mpi_tile(self, db: Apdb | None, comm: Any, tile_data: Any = None) -> Any:
         """Execute single-visit processing in each MPI tile process.
 
         Parameters
@@ -544,7 +529,7 @@ class APProto:
 
     def visit(
         self,
-        db: Apdb,
+        db: Apdb | None,
         visit_id: int,
         visit_time: astropy.time.Time,
         region: Region,
@@ -573,6 +558,14 @@ class APProto:
         tile : `tuple`
             tile position (x, y)
         """
+        if self.config.random_delay > 0:
+            delay = random.uniform(0.0, self.config.random_delay)
+            _LOG.info("Sleeping for %.2f seconds", delay)
+            time.sleep(delay)
+
+        if db is None:
+            db = Apdb.from_uri(self.args.config)
+
         name = ""
         detector = 0
         if tile is not None:
