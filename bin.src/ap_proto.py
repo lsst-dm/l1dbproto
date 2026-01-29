@@ -22,6 +22,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
+
 from lsst.l1dbproto import APProto
 
 app = APProto(sys.argv[1:])

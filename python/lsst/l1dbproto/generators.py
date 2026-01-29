@@ -19,11 +19,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Module defining methods for generating random things.
-"""
+"""Module defining methods for generating random things."""
+
 from __future__ import annotations
 
 import math
+
 import numpy
 
 from .geom import rotation_matrix

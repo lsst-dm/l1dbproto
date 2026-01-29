@@ -26,6 +26,7 @@ __all__ = ["L1dbprotoConfig"]
 import math
 
 import astropy.time
+
 from lsst.pex.config import ChoiceField, Config, Field
 
 
@@ -71,7 +72,7 @@ class L1dbprotoConfig(Config):
         doc="Fraction of the variable objects that generate DiaSources",
     )
     mp_mode = ChoiceField[str](
-        allowed=dict(fork="Forking mode", mpi="MPI mode"),
+        allowed={"fork": "Forking mode", "mpi": "MPI mode"},
         doc="multiprocessing mode, only for `divide > 1` or `divide < 0",
         default="fork",
     )

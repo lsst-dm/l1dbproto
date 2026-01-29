@@ -62,7 +62,7 @@ class VisitInfoStore:
             Last stored visit info or `None` if there was nothing stored yet.
         """
         try:
-            with open(self.path, "r") as file:
+            with open(self.path) as file:
                 data = file.read()
         except Exception:
             # cannot open file

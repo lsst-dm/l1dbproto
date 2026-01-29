@@ -5,8 +5,6 @@
 Note that this is Jython script and Jython only understands Python 2.7.
 """
 
-from __future__ import print_function
-
 import argparse
 import gzip
 import logging
@@ -87,7 +85,7 @@ def main() -> None:
     if args.user or args.password:
         credentials = array([args.user, args.password], String)
         environment = {JMXConnector.CREDENTIALS: credentials}
-    jmxServiceUrl = JMXServiceURL("service:jmx:rmi:///jndi/rmi://{}:{}/jmxrmi".format(args.server, args.port))
+    jmxServiceUrl = JMXServiceURL(f"service:jmx:rmi:///jndi/rmi://{args.server}:{args.port}/jmxrmi")
     jmxConnector = JMXConnectorFactory.connect(jmxServiceUrl, environment)
 
     with closing(jmxConnector):
@@ -113,9 +111,9 @@ def _dump(conn: Any) -> None:
     names.sort(key=str)
     for oname in names:
         info = conn.getMBeanInfo(oname)
-        print("{}".format(oname))
+        print(f"{oname}")
         for attr in info.attributes:
-            print("    {}: {}".format(attr.name, attr.type))
+            print(f"    {attr.name}: {attr.type}")
 
 
 def _read_config(yaml_path: str) -> dict[str, Any]:
@@ -138,7 +136,7 @@ def _read_config(yaml_path: str) -> dict[str, Any]:
         config = yaml.load(input, Loader=yaml.FullLoader)
     logging.debug("config: %r", config)
     if "metrics" not in config:
-        config["metrics"] = [dict(object="*:*", attributes=".*")]
+        config["metrics"] = [{"object": "*:*", "attributes": ".*"}]
     for cfg in config["metrics"]:
         cfg["object"] = ObjectName(cfg["object"])
         cfg["attributes"] = re.compile(cfg.get("attributes", ".*"))
@@ -169,7 +167,7 @@ def _makeOutput(args: argparse.Namespace) -> TextIO:
 
     # write InfluxDB DML header
     print("# DML", file=out)
-    print("# CONTEXT-DATABASE: {}".format(args.database), file=out)
+    print(f"# CONTEXT-DATABASE: {args.database}", file=out)
     return out
 
 
@@ -277,17 +275,17 @@ def _attr2influx(oname: Any, values: Iterable[Any], host: str) -> str | None:
             line += "." + n
         for k, v in keys.items():
             v = v.replace(" ", "_")
-            line += ",{}={}".format(k, v)
+            line += f",{k}={v}"
         if host:
-            line += ",host={}".format(host)
+            line += f",host={host}"
         vals = []
         for val in values:
             # only include basic numeric types for now
             value = val.value
             if isinstance(value, float) and math.isnan(value):
                 continue
-            if isinstance(value, (int, float)):
-                vals += ["{}={}".format(val.name, value)]
+            if isinstance(value, int | float):
+                vals += [f"{val.name}={value}"]
         if vals:
             line += " " + ",".join(vals)
         else:

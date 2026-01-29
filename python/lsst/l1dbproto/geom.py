@@ -26,9 +26,10 @@ from __future__ import annotations
 import logging
 import math
 
+import numpy as np
+
 import lsst.geom
 import lsst.sphgeom as sph
-import numpy as np
 
 _LOG = logging.getLogger("ap_proto")
 

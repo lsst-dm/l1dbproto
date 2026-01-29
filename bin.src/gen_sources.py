@@ -32,6 +32,7 @@ import math
 from argparse import ArgumentParser
 
 import numpy
+
 from lsst.l1dbproto import generators
 
 
@@ -65,7 +66,7 @@ def main() -> None:
         "--hemi",
         type=int,
         default=0,
-        help="Zero for whole sky, negative for southern hemisphere, " "positive for northern, def: 0",
+        help="Zero for whole sky, negative for southern hemisphere, positive for northern, def: 0",
     )
     parser.add_argument(
         "-n", "--counts", type=int, default=10000, help="Number of sources per visit, def: 10000"

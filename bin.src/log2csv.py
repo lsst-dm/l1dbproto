@@ -88,7 +88,7 @@ class _Stat:
         if v is None:
             return "NULL"
         else:
-            return "{:.6g}".format(v)
+            return f"{v:.6g}"
 
 
 # dictionary with visit statistics, top index is visit, second index is
@@ -313,8 +313,8 @@ def main() -> None:
                 f.read(1)
                 f.seek(0)
                 input = f
-            except IOError:
-                input = open(input, "rt")
+            except OSError:
+                input = open(input)
         if args.follow:
             input = _follow(input, args.follow_timeout)
 

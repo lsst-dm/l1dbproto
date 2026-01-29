@@ -44,11 +44,12 @@ import felis.datamodel
 import numpy
 import numpy.random
 import pandas
+from mpi4py import MPI
+
 from lsst.dax.apdb import Apdb, ApdbReplica, ApdbTables, monitor, timer
 from lsst.geom import SpherePoint
 from lsst.sphgeom import Angle, Circle, LonLat, Region, UnitVector3d, Vector3d
 from lsst.utils.iteration import chunk_iterable
-from mpi4py import MPI
 
 from . import DIA, L1dbprotoConfig, generators, geom
 from .visit_info import VisitInfoStore
@@ -589,8 +590,9 @@ class APProto:
 
         with timer.Timer("tile_read_time", _MON, _LOG):
             with timer.Timer(name + "Objects-read", _LOG):
-                # Retrieve DiaObjects (latest versions) from database for matching,
-                # this will produce wider coverage so further filtering is needed
+                # Retrieve DiaObjects (latest versions) from database for
+                # matching, this will produce wider coverage so further
+                # filtering is needed.
                 latest_objects = db.getDiaObjects(region)
                 _LOG.info(name + "database found %s objects", _nrows(latest_objects))
                 counts["objects"] = _nrows(latest_objects)
@@ -721,10 +723,7 @@ class APProto:
 
         # Set nDiaSources for each object, update from existing objects.
         # Could do it with some pandas magic, but it's insane.
-        count_map = {
-            obj_id: count
-            for obj_id, count in known_objects[["diaObjectId", "nDiaSources"]].itertuples(index=False)
-        }
+        count_map = dict(known_objects[["diaObjectId", "nDiaSources"]].itertuples(index=False))
 
         def _count_sources(row: Any) -> pandas.Series:
             count = count_map.get(row.diaObjectId, 0) + 1
