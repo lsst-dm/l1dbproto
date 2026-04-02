@@ -123,9 +123,9 @@ def main() -> None:
 
     avg_area = sum(area_per_tile) / len(area_per_tile)
 
-    print("pixels_per_tile: {:.2f}".format(sum(pixels_per_tile) / len(pixels_per_tile)))
-    print("area_per_tile: {:.6f} deg^2".format(avg_area))
-    print("tiles_per_pixel: {:.2f}".format(sum(tiles_per_pixel) / len(tiles_per_pixel)))
+    print(f"pixels_per_tile: {sum(pixels_per_tile) / len(pixels_per_tile):.2f}")
+    print(f"area_per_tile: {avg_area:.6f} deg^2")
+    print(f"tiles_per_pixel: {sum(tiles_per_pixel) / len(tiles_per_pixel):.2f}")
 
     if args.pixels_per_tile:
         with open(args.pixels_per_tile, "w") as f:

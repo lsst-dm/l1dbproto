@@ -1,4 +1,5 @@
 setupRequired(dax_apdb)
+setupRequired(geom)
 #setupRequired(mpi4py)
 #setupRequired(python)
 #setupRequired(scons)

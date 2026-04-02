@@ -23,8 +23,8 @@
 
 import sys
 
-from lsst.l1dbproto.ap_proto import APProto
+from lsst.l1dbproto.ap_proto_visit import APProtoVisit
 
-app = APProto(sys.argv[1:])
+app = APProtoVisit(sys.argv[1:])
 rc = app.run()
 sys.exit(rc)

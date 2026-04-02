@@ -26,6 +26,7 @@ __all__ = ["L1dbprotoConfig"]
 import math
 
 import astropy.time
+
 from lsst.pex.config import ChoiceField, Config, Field
 
 
@@ -71,7 +72,7 @@ class L1dbprotoConfig(Config):
         doc="Fraction of the variable objects that generate DiaSources",
     )
     mp_mode = ChoiceField[str](
-        allowed=dict(fork="Forking mode", mpi="MPI mode"),
+        allowed={"fork": "Forking mode", "mpi": "MPI mode"},
         doc="multiprocessing mode, only for `divide > 1` or `divide < 0",
         default="fork",
     )
@@ -99,6 +100,10 @@ class L1dbprotoConfig(Config):
         default=None,
     )
     mon_rules = Field[str](doc="Comma-separated list of monitoring filter rules.", default="")
+    random_delay = Field[float](
+        doc="Random delay before processing each detector in seconds.",
+        default=0.0,
+    )
 
     @property
     def FOV_rad(self) -> float:

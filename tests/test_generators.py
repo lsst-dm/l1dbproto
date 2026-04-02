@@ -21,13 +21,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Unit tests for l1dbproto.generators module.
-"""
+"""Unit tests for l1dbproto.generators module."""
 
 import math
 import unittest
 
 import numpy
+
 from lsst.l1dbproto import generators
 
 

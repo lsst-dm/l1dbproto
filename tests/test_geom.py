@@ -21,14 +21,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Unit tests for l1dbproto.geom module.
-"""
+"""Unit tests for l1dbproto.geom module."""
 
 import math
 import unittest
 
-import lsst.sphgeom as sph
 import numpy as np
+
+import lsst.sphgeom as sph
 from lsst.l1dbproto import geom
 
 
@@ -61,7 +61,6 @@ class TestGeom(unittest.TestCase):
         self.assertTrue(np.array_equal(R, expected))
 
     def test_make_square_tiles(self) -> None:
-
         tiles = geom.make_square_tiles(3.5 * math.pi / 180, 2, 2)
         self.assertEqual(len(tiles), 4)
 
@@ -78,7 +77,6 @@ class TestGeom(unittest.TestCase):
         self.assertEqual(len(tiles), 15 * 15 - 4 * 6)
 
     def test_make_camera_tiles(self) -> None:
-
         tiles = geom.make_camera_tiles(3.5 * math.pi / 180, 2)
         self.assertEqual(len(tiles), 84)
 
@@ -92,7 +90,6 @@ class TestGeom(unittest.TestCase):
             self.assertFalse(ix >= 12 and iy >= 12)
 
     def test_make_tiles(self) -> None:
-
         tiles = geom.make_tiles(3.5 * math.pi / 180, 2)
         self.assertEqual(len(tiles), 4)
 
@@ -116,7 +113,6 @@ class TestGeom(unittest.TestCase):
             self.assertAlmostEqual(a, area)
 
     def test_area_tri(self) -> None:
-
         sphere_area = 4 * math.pi
 
         # one quarter of hemisphere

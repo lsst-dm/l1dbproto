@@ -33,7 +33,7 @@ import time
 from argparse import ArgumentParser
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 _tz = None
@@ -85,7 +85,7 @@ class _Stat:
         if v is None:
             return "NULL"
         else:
-            return "{:.6g}".format(v)
+            return f"{v:.6g}"
 
 
 # dictionary with context info
@@ -405,12 +405,12 @@ def main() -> None:
 
     if args.utc:
         global _tz
-        _tz = timezone.utc
+        _tz = datetime.UTC
 
     dispatch = _dispatch
 
     print("# DML")
-    print("# CONTEXT-DATABASE: {}".format(args.database))
+    print(f"# CONTEXT-DATABASE: {args.database}")
 
     # open each file in order
     for input in args.file:
@@ -422,8 +422,8 @@ def main() -> None:
                 f.read(1)
                 f.seek(0)
                 input = f
-            except IOError:
-                input = open(input, "rt")
+            except OSError:
+                input = open(input)
         if args.follow:
             input = _follow(input, args.follow_timeout)
         for line in _sort_lines(input):
